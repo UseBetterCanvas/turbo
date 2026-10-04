@@ -39,6 +39,7 @@ enum IslandLayout {
     static let idleSideWidth: CGFloat = 34
     static let floatingIdleSize = CGSize(width: 86, height: 30)
     static let listFooterHeight: CGFloat = 40
+    static let listHeadlineHeight: CGFloat = 26
     static let floatingCompactWidth: CGFloat = 248
     static let floatingCompactHeight: CGFloat = 38
     static let floatingGap: CGFloat = 6
@@ -89,7 +90,7 @@ enum IslandLayout {
             return CGSize(width: cardWidth, height: headroom(geometry) + 104)
         case .list:
             let count = CGFloat(min(max(rows, 1), maxRows))
-            return CGSize(width: cardWidth, height: headroom(geometry) + count * rowHeight + 10 + listFooterHeight)
+            return CGSize(width: cardWidth, height: headroom(geometry) + listHeadlineHeight + count * rowHeight + 10 + listFooterHeight)
         }
     }
 

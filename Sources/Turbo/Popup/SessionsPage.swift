@@ -175,15 +175,15 @@ struct SessionRowView: View {
         }
     }
 
-    /// "Claude Code · 4:12 · Bash", "Codex · cooked in 3m 12s · Fixed the bug"
+    /// "Claude Code · Running a command · 4:12", "Codex · cooked in 3m 12s · Fixed the bug"
     private var detail: String {
         var parts = [session.agent.displayName]
         switch session.phase {
         case let .needsInput(message):
             parts.append(message ?? "Waiting on a permission prompt")
         case .cooking:
+            parts.append(session.activity)
             if let start = session.turnStartedAt { parts.append(Format.clock(now.timeIntervalSince(start))) }
-            if let tool = session.lastTool { parts.append(tool) }
         case .done:
             if session.failed { parts.append("Failed") }
             if let duration = session.cookDuration { parts.append("\(session.failed ? "ran for" : "cooked in") \(Format.duration(duration))") }

@@ -363,6 +363,15 @@ private struct SessionList: View {
         VStack(spacing: 0) {
             TimelineView(.periodic(from: .now, by: 1)) { context in
                 VStack(spacing: 0) {
+                    // One line: what's going on right now.
+                    Text(headline(for: model.board, now: context.date))
+                        .font(DSFont.sans(12, .semibold).monospacedDigit())
+                        .foregroundStyle(Color.white.opacity(0.85))
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 8)
+                        .frame(height: IslandLayout.listHeadlineHeight)
                     if sessions.isEmpty {
                         HStack(spacing: 10) {
                             Image(systemName: "pawprint.fill")
