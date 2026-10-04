@@ -33,13 +33,25 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release delete latest-build --cleanup-tag --yes || true
-          gh release create latest-build build/Turbo.zip \
-            --prerelease \
-            --target "$GITHUB_SHA" \
-            --title "Turbo (latest build)" \
-            --notes "Built from ${GITHUB_REF_NAME} @ ${GITHUB_SHA::7}.
+          cat > notes.md <<'NOTES'
+          Built from __REF__ @ __SHA__.
 
-          Easiest install (needs the GitHub CLI, skips the unverified-app prompt): \`gh api repos/${GITHUB_REPOSITORY}/contents/scripts/install.sh -H "Accept: application/vnd.github.raw" | bash\`
+          **Install** (needs the GitHub CLI, and skips the unverified-app prompt):
 
-          Or unzip, drag Turbo.app to Applications, open it once, then System Settings → Privacy & Security → Open Anyway (it isn't notarized yet)."
+          ```sh
+          gh api repos/__REPO__/contents/scripts/install.sh -H "Accept: application/vnd.github.raw" | bash
+          ```
+
+          Or download Turbo.zip below, drag Turbo.app to Applications, open it once, then System Settings → Privacy & Security → Open Anyway (it isn't notarized yet).
+          NOTES
+          sed -i '' -e "s|__REF__|${GITHUB_REF_NAME}|" -e "s|__SHA__|${GITHUB_SHA::7}|" -e "s|__REPO__|${GITHUB_REPOSITORY}|" notes.md
+
+          # Update in place so the download never disappears, even if a later step fails.
+          git tag -f latest-build "$GITHUB_SHA"
+          git push -f origin refs/tags/latest-build
+          if gh release view latest-build >/dev/null 2>&1; then
+            gh release upload latest-build build/Turbo.zip --clobber
+            gh release edit latest-build --prerelease --title "Turbo (latest build)" --notes-file notes.md
+          else
+            gh release create latest-build build/Turbo.zip --prerelease --verify-tag --title "Turbo (latest build)" --notes-file notes.md
+          fi
