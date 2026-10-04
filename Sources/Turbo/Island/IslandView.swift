@@ -129,9 +129,12 @@ private struct CompactIsland: View {
     @State private var glow = false
 
     var body: some View {
-        let lead = sessions.first
-        let waiting = sessions.contains { if case .needsInput = $0.phase { return true } else { return false } }
-        let agents = Array(Set(sessions.map(\.agent))).sorted { $0.rawValue < $1.rawValue }
+        let lead = model.lead
+        let waitingCount = sessions.filter { if case .needsInput = $0.phase { return true } else { return false } }.count
+        let waiting = waitingCount > 0
+        let cookingCount = sessions.count - waitingCount
+        let allAgents = Array(Set(sessions.map(\.agent))).sorted { $0.rawValue < $1.rawValue }
+        let agents = Array(allAgents.prefix(2))
 
         ZStack(alignment: .bottom) {
             HStack(spacing: 0) {
@@ -139,13 +142,14 @@ private struct CompactIsland: View {
                 HStack(spacing: 6) {
                     ZStack {
                         Circle()
-                            .fill((lead?.agent.tint ?? DS.Palette.gold).opacity(glow ? 0.45 : 0))
+                            .fill(Color.white.opacity(glow ? 0.3 : 0))
                             .frame(width: 22, height: 22)
                             .blur(radius: 5)
                         if waiting {
                             AttentionHand(size: 12)
                         } else {
-                            CookingFlame(tint: lead?.agent.tint ?? DS.Palette.gold, size: 13)
+                            // Cooking is neutral. Color is saved for what needs you.
+                            CookingFlame(tint: DS.Palette.textPrimary, size: 13)
                                 .scaleEffect(glow && !reduceMotion ? 1.18 : 1, anchor: .bottom)
                         }
                     }
@@ -153,6 +157,12 @@ private struct CompactIsland: View {
                         ForEach(agents, id: \.self) { agent in
                             AgentBadge(agent: agent, size: 15)
                                 .background(Circle().fill(.black).padding(-1))
+                        }
+                        if allAgents.count > agents.count {
+                            Text("+\(allAgents.count - agents.count)")
+                                .font(DSFont.sans(9, .heavy))
+                                .foregroundStyle(DS.Palette.textSecondary)
+                                .padding(.leading, 5)
                         }
                     }
                 }
@@ -174,7 +184,8 @@ private struct CompactIsland: View {
 
                 // Trailing: how long it's been on the stove.
                 HStack(spacing: 5) {
-                    if let start = lead?.turnStartedAt {
+                    // How long the lead has been waiting on you, or cooking.
+                    if let start = lead?.needsInputSince ?? lead?.turnStartedAt {
                         TimelineView(.periodic(from: .now, by: 1)) { context in
                             let text = Format.clock(context.date.timeIntervalSince(start))
                             Text(text)
@@ -184,15 +195,14 @@ private struct CompactIsland: View {
                                 .animation(DS.Motion.slow, value: text)
                         }
                     }
-                    if sessions.count > 1 || waiting {
-                        let waitingCount = sessions.filter { if case .needsInput = $0.phase { return true } else { return false } }.count
-                        Text("\(waiting ? waitingCount : sessions.count)")
-                            .font(DSFont.sans(9.5, .heavy).monospacedDigit())
-                            .foregroundStyle(.black)
-                            .frame(minWidth: 15, minHeight: 15)
-                            .background(Capsule().fill(waiting ? DS.Palette.gold : Color.white.opacity(0.9)))
-                            .transition(.scale.combined(with: .opacity))
-                            .help(waiting ? "\(waitingCount) waiting on you" : "\(sessions.count) cooking")
+                    // Who's waiting (gold) and who's cooking (white), at a glance.
+                    if waiting {
+                        CountPill(count: waitingCount, fill: DS.Palette.gold)
+                            .help("\(waitingCount) need you")
+                    }
+                    if cookingCount > 1 || (waiting && cookingCount > 0) {
+                        CountPill(count: cookingCount, fill: DS.Palette.textPrimary)
+                            .help("\(cookingCount) cooking")
                     }
                 }
                 .frame(width: IslandLayout.compactSideWidth, alignment: .center)
@@ -200,7 +210,7 @@ private struct CompactIsland: View {
             .frame(height: geometry.docked ? geometry.notchSize.height : IslandLayout.floatingCompactHeight)
 
             if !waiting && !reduceMotion {
-                CookingShimmer(tint: lead?.agent.tint ?? DS.Palette.gold)
+                CookingShimmer(tint: DS.Palette.textPrimary)
                     .padding(.horizontal, geometry.docked ? 12 : 18)
                     .padding(.bottom, 1)
             }
@@ -213,12 +223,31 @@ private struct CompactIsland: View {
     }
 }
 
+private struct CountPill: View {
+    let count: Int
+    let fill: Color
+
+    var body: some View {
+        Text("\(count)")
+            .font(DSFont.mono(10.5, .bold))
+            .foregroundStyle(.black)
+            .frame(minWidth: 16, minHeight: 16)
+            .padding(.horizontal, count > 9 ? 3 : 0)
+            .background(Capsule().fill(fill))
+            .transition(.opacity)
+    }
+}
+
 // MARK: Spotlight: the "it's done" moment
 
 private struct SpotlightCard: View {
     @EnvironmentObject private var model: AppModel
     @EnvironmentObject private var prefs: Preferences
     let spotlight: Spotlight
+
+    private var hasApproval: Bool {
+        spotlight.kind == .needsInput && model.pendingApproval(for: spotlight.session) != nil
+    }
 
     var body: some View {
         let session = spotlight.session
@@ -304,20 +333,22 @@ private struct SpotlightCard: View {
                     .background(Capsule().fill(Color.white.opacity(0.12)))
                     .padding(.top, 10)
                     .padding(.trailing, 16)
-                    .opacity(hovering ? 0 : 1)
+                    .opacity(hovering || hasApproval ? 0 : 1)
             }
 
-            // Hover affordances: one click to the thread, and a way out.
+            // Hover affordances: one click to the thread, and a way out. Hidden while Allow /
+            // Deny are showing, which sit in the same corner.
             HStack(spacing: 6) {
                 if session.link != nil || session.hostAppBundleID != nil {
                     Button("Open") {
                         model.open(session)
                         model.advanceSpotlight()
                     }
-                    .buttonStyle(BCButtonStyle(variant: spotlight.kind == .needsInput ? .primary : .secondary, size: .sm))
+                    .buttonStyle(BCButtonStyle(variant: .secondary, size: .sm))
                     .controlSize(.small)
                 }
                 Button {
+                    model.markSeen(session)
                     model.advanceSpotlight()
                 } label: {
                     Image(systemName: "xmark")
@@ -330,33 +361,35 @@ private struct SpotlightCard: View {
             }
             .padding(.top, 8)
             .padding(.trailing, 14)
-            .opacity(hovering ? 1 : 0)
+            .opacity(hovering && !hasApproval ? 1 : 0)
+            .allowsHitTesting(hovering && !hasApproval)
             .offset(y: hovering ? 0 : -4)
             .animation(DS.Motion.slow, value: hovering)
         }
         .overlay(alignment: .bottom) {
             if spotlight.kind == .finished {
-                CountdownBar(seconds: prefs.celebrateSeconds, tint: session.agent.tint)
+                CountdownBar(seconds: model.spotlightSeconds, tint: DS.Palette.ok)
                     .padding(.horizontal, 30)
                     .padding(.bottom, 6)
                     .opacity(hovering ? 0 : 1)
-                    .animation(.easeOut(duration: 0.2), value: hovering)
+                    .animation(DS.Motion.base, value: hovering)
             }
         }
     }
 
     private func title(for session: AgentSession) -> String {
         switch spotlight.kind {
-        case .finished: return session.failed ? "\(session.projectName) failed" : "\(session.projectName) is done"
-        case .needsInput: return "\(session.projectName) needs you"
+        // Outcome first, so a long name is what gets cut.
+        case .finished: return session.failed ? "Failed: \(session.projectName)" : "Done: \(session.projectName)"
+        case .needsInput: return "Needs you: \(session.projectName)"
         }
     }
 
     private func subtitle(for session: AgentSession) -> String {
         if spotlight.kind == .finished, let duration = session.cookDuration {
-            return "\(session.agent.displayName) · cooked for \(Format.duration(duration))"
+            return [session.place ?? session.agent.displayName, Format.duration(duration)].joined(separator: " · ")
         }
-        return session.agent.displayName
+        return session.place ?? session.agent.displayName
     }
 
     private func detail(for session: AgentSession) -> String? {
@@ -395,7 +428,7 @@ private struct SessionList: View {
                                 .frame(width: 26)
                             VStack(alignment: .leading, spacing: 2) {
                                 Text("Nothing cooking").font(DSFont.sans(12.5, .bold)).foregroundStyle(.white)
-                                Text("Start a session and it shows up here.")
+                                Text("Start a session and it'll show up here.")
                                     .font(DSFont.sans(11, .medium))
                                     .foregroundStyle(Color.white.opacity(0.55))
                             }
@@ -463,6 +496,7 @@ private extension SessionList {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak model] in
             guard let model, model.isHoveringIsland, model.hoveredRowID == id, model.detailSessionID != id else { return }
             withAnimation(DS.Motion.base) { model.detailSessionID = id }
+            model.markSeen(session)
         }
     }
 }
@@ -483,7 +517,7 @@ private struct SessionDetail: View {
                 labeled(session.phase.isActive ? "Latest" : "Result", text)
             }
             if case let .needsInput(message) = session.phase, let message {
-                labeled("Waiting on", message)
+                labeled("Needs", message)
             }
             if !session.recentSteps.isEmpty {
                 HStack(spacing: 4) {
@@ -497,8 +531,8 @@ private struct SessionDetail: View {
                     }
                     if session.beats > 0 {
                         Text("\(session.beats) updates")
-                            .font(DSFont.sans(10, .medium).monospacedDigit())
-                            .foregroundStyle(Color.white.opacity(0.45))
+                            .font(DSFont.mono(10))
+                            .foregroundStyle(DS.Palette.textTertiary)
                     }
                 }
             }
@@ -512,9 +546,14 @@ private struct SessionDetail: View {
             Spacer(minLength: 0)
             HStack(spacing: 6) {
                 Spacer()
-                if model.pendingApproval(for: session) != nil {
+                if let pending = model.pendingApproval(for: session) {
                     Button("Deny") { model.decide(session, allow: false) }
                         .buttonStyle(BCButtonStyle(variant: .secondary, size: .sm))
+                    if let rule = pending.rule {
+                        Button("Always Allow") { model.alwaysAllow(session) }
+                            .buttonStyle(BCButtonStyle(variant: .secondary, size: .sm))
+                            .help("Allows \(rule) in this repo from now on")
+                    }
                     Button("Allow") { model.decide(session, allow: true) }
                         .buttonStyle(BCButtonStyle(variant: .primary, size: .sm))
                 } else if session.link != nil || session.hostAppBundleID != nil {
@@ -542,9 +581,9 @@ private struct SessionDetail: View {
     private func labeled(_ label: String, _ text: String) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 6) {
             Text(label.uppercased())
-                .font(DSFont.sans(9, .heavy))
+                .font(DSFont.sans(10, .heavy))
                 .tracking(0.8)
-                .foregroundStyle(Color.white.opacity(0.4))
+                .foregroundStyle(DS.Palette.textTertiary)
                 .frame(width: 58, alignment: .leading)
             Text(text)
                 .font(DSFont.sans(11.5, .medium))
@@ -587,7 +626,7 @@ private struct IdleIsland: View {
     let geometry: NotchGeometry
 
     var body: some View {
-        let done = model.board.done.count
+        let done = model.unseenDone.count
         HStack(spacing: 0) {
             Image(systemName: "pawprint.fill")
                 .font(.system(size: 11, weight: .semibold))
@@ -598,7 +637,7 @@ private struct IdleIsland: View {
                         Circle().fill(DS.Palette.ok).frame(width: 5, height: 5).offset(x: 4, y: -3)
                     }
                 }
-                .help(done > 0 ? "\(done) done" : "Turbo")
+                .help(done > 0 ? "\(done) finished, not opened yet" : "Turbo · ⌃⌥Space")
                 .frame(width: geometry.docked ? IslandLayout.idleSideWidth : 28)
             if geometry.docked && geometry.hasNotch {
                 Color.clear.frame(width: geometry.notchSize.width)
@@ -676,7 +715,7 @@ struct SessionRow: View {
             Spacer(minLength: 0)
             switch session.phase {
             case .cooking:
-                CookingFlame(tint: session.agent.tint, size: 12)
+                CookingFlame(tint: DS.Palette.textPrimary, size: 12)
             case .needsInput:
                 Image(systemName: "hand.raised.fill").foregroundStyle(DS.Palette.gold).font(.system(size: 12))
             case .done:

@@ -24,9 +24,9 @@ struct VisualizerView: View {
                 HStack {
                     Spacer()
                     HStack(spacing: 10) {
-                        KeyHint(keys: "← →", label: "look")
-                        KeyHint(keys: "F", label: "full screen")
-                        KeyHint(keys: "esc", label: "close")
+                        KeyHint(keys: "← →", label: "Look")
+                        KeyHint(keys: "F", label: "Full Screen")
+                        KeyHint(keys: "esc", label: "Close")
                     }
                     .opacity(chromeVisible ? 1 : 0)
                 }
@@ -191,7 +191,7 @@ private struct NowCookingCard: View {
                         .padding(.top, 4)
                     }
                 } else {
-                    Text("NOTHING ON THE STOVE")
+                    Text("NOTHING COOKING")
                         .font(DSFont.sans(10.5, .heavy))
                         .tracking(2)
                         .foregroundStyle(.white.opacity(0.5))
@@ -221,7 +221,7 @@ private struct FinaleOverlay: View {
                 .font(.system(size: 64, weight: .bold))
                 .foregroundStyle(.white, session.agent.tint)
                 .scaleEffect(popped ? 1 : 0.3)
-            Text("Cooked.")
+            Text("Done.")
                 .font(.system(size: 54, weight: .heavy, design: .rounded))
                 .foregroundStyle(.white)
             Text(subtitle)

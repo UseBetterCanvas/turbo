@@ -131,6 +131,9 @@ public enum EventParser {
         /// False when the detail had to be shortened. Turbo then leaves the prompt to the
         /// terminal, so nobody allows a command they couldn't read in full.
         public var isComplete: Bool = true
+        /// A permission rule that allows exactly this request from now on, when one is safe to
+        /// offer: `Bash(npm test)` for a one-line command.
+        public var rule: String? = nil
     }
 
     public static func parsePermissionRequest(_ data: Data) -> PermissionAsk? {
@@ -146,8 +149,16 @@ public enum EventParser {
         let detail = full.map { $0.count > limit ? String($0.prefix(limit - 1)) + "…" : $0 }
         return PermissionAsk(
             sessionID: (obj["session_id"] as? String) ?? "claude", cwd: obj["cwd"] as? String, tool: tool, detail: detail,
-            isComplete: (full?.count ?? 0) <= limit
+            isComplete: (full?.count ?? 0) <= limit,
+            rule: allowRule(tool: tool, input: input)
         )
+    }
+
+    static func allowRule(tool: String, input: [String: Any]) -> String? {
+        guard tool == "Bash", let command = (input["command"] as? String)?.trimmingCharacters(in: .whitespaces),
+              !command.isEmpty, command.count <= 100, !command.contains(where: \.isNewline),
+              !command.contains("(") && !command.contains(")") else { return nil }
+        return "Bash(\(command))"
     }
 
     /// The JSON a PermissionRequest hook prints to allow or deny.

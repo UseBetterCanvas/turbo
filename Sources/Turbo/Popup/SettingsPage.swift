@@ -557,7 +557,7 @@ struct UpdateRow: View {
                 ProgressView().controlSize(.small)
             case .needsAccess:
                 HStack(spacing: DS.Space.s) {
-                    Button("Copy Sign-in Command") { copy("brew install gh && gh auth login") }
+                    Button("Copy Sign-In Command") { copy("brew install gh && gh auth login") }
                         .buttonStyle(SecondaryButtonStyle())
                     Button("Check Again") { Task { await updater.check() } }
                         .buttonStyle(SecondaryButtonStyle())

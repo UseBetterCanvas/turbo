@@ -34,6 +34,8 @@ public struct AgentSession: Identifiable, Equatable, Sendable {
     public var failed = false
     /// What was asked to start this turn (local sessions only).
     public var lastPrompt: String?
+    /// When it started waiting on you. Nil unless it's waiting.
+    public var needsInputSince: Date?
     /// A short name from the first thing this session was asked. Kept across turns.
     public var threadName: String?
     /// The latest steps this turn, newest last (tool names).
@@ -164,6 +166,7 @@ public final class SessionStore {
         case let .needsInput(message):
             s.lastActivityAt = now
             if !s.phase.isActive { startTurn(&s, at: now) }
+            if case .needsInput = s.phase {} else { s.needsInputSince = now }
             s.phase = .needsInput(message: message)
             changes.append(.needsInput(s))
 
@@ -188,6 +191,7 @@ public final class SessionStore {
             return isNew ? [] : [.removed(id: key)]
         }
 
+        if case .needsInput = s.phase {} else { s.needsInputSince = nil }
         sessions[key] = s
         return changes
     }

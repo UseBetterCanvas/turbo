@@ -504,3 +504,38 @@ final class SessionNamingTests: XCTestCase {
         XCTAssertEqual(EventParser.parseCodexRolloutLine(Data(line.utf8)), .prompt("Refactor the billing module"))
     }
 }
+
+final class TriageTests: XCTestCase {
+    func testNeedsInputSinceTracksWaiting() {
+        let store = SessionStore()
+        let t0 = Date()
+        _ = store.apply(AgentEvent(agent: .claude, sessionID: "a", kind: .promptSubmitted, date: t0))
+        _ = store.apply(AgentEvent(agent: .claude, sessionID: "a", kind: .needsInput(message: "x"), date: t0.addingTimeInterval(5)))
+        _ = store.apply(AgentEvent(agent: .claude, sessionID: "a", kind: .needsInput(message: "y"), date: t0.addingTimeInterval(9)))
+        XCTAssertEqual(store.sorted.first?.needsInputSince, t0.addingTimeInterval(5))
+        _ = store.apply(AgentEvent(agent: .claude, sessionID: "a", kind: .activity(tool: "Bash"), date: t0.addingTimeInterval(12)))
+        XCTAssertNil(store.sorted.first?.needsInputSince)
+    }
+
+    func testAllowRuleOnlyForSimpleCommands() throws {
+        func ask(_ cmd: String) -> String? {
+            let json = try! JSONSerialization.data(withJSONObject: ["session_id": "s", "tool_name": "Bash", "tool_input": ["command": cmd]])
+            return EventParser.parsePermissionRequest(json)?.rule
+        }
+        XCTAssertEqual(ask("npm test"), "Bash(npm test)")
+        XCTAssertNil(ask("npm test\nrm -rf /"))
+        XCTAssertNil(ask("echo $(whoami)"))
+    }
+
+    func testAddingAllowRuleKeepsSettings() throws {
+        let existing = Data(#"{"model":"opus","permissions":{"allow":["Read"],"deny":["Bash(rm:*)"]}}"#.utf8)
+        let out = try HookInstaller.addingAllowRule("Bash(npm test)", to: existing)
+        let again = try HookInstaller.addingAllowRule("Bash(npm test)", to: out)
+        let root = try XCTUnwrap(JSONSerialization.jsonObject(with: again) as? [String: Any])
+        let perms = try XCTUnwrap(root["permissions"] as? [String: Any])
+        XCTAssertEqual(perms["allow"] as? [String], ["Read", "Bash(npm test)"])
+        XCTAssertEqual(perms["deny"] as? [String], ["Bash(rm:*)"])
+        XCTAssertEqual(root["model"] as? String, "opus")
+        XCTAssertNotNil(try HookInstaller.addingAllowRule("Bash(ls)", to: nil))
+    }
+}

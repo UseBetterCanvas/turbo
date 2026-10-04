@@ -80,7 +80,7 @@ private struct WelcomeIntro: View {
             HStack(spacing: DS.Space.xl) {
                 Feature(symbol: "square.stack.3d.up", title: "Every session", text: "Local or cloud, in one place")
                 Feature(symbol: "hand.raised", title: "Needs you", text: "See who's waiting first")
-                Feature(symbol: "arrow.up.forward.app", title: "One click", text: "Jump straight to the thread")
+                Feature(symbol: "arrow.up.forward.app", title: "One click", text: "Jump straight to the session")
             }
             .padding(.top, DS.Space.s)
             Spacer(minLength: 0)
@@ -116,7 +116,7 @@ private struct WelcomeConnect: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: DS.Space.m) {
-            PageHeader(title: "Connect your agents", subtitle: "Turn on what your team uses. You can change this later under Agents.")
+            PageHeader(title: "Connect your agents", subtitle: "Turn on what you use. You can change this anytime in Settings.")
 
             AgentSetupCard(agent: .cloud, status: prefs.cloudEnabled ? ("On", .good) : ("Off", .neutral)) {
                 Toggle("Cloud", isOn: $prefs.cloudEnabled).toggleStyle(BCSwitchStyle()).labelsHidden()
@@ -166,7 +166,7 @@ private struct WelcomeConnect: View {
                 IconTile(symbol: agent.symbol, tint: agent.tint, size: 28)
                 Text(agent.displayName).font(DS.Typography.bodyStrong)
                 Spacer()
-                StatusPill(text: ready ? "Ready" : "Ready when used", tone: ready ? .good : .neutral)
+                StatusPill(text: ready ? "Ready" : "Auto", tone: ready ? .good : .neutral)
             }
         }
     }

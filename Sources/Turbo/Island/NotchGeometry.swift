@@ -89,8 +89,9 @@ enum IslandLayout {
             return geometry.docked
                 ? CGSize(width: notch.width + 2 * compactSideWidth + flare, height: notch.height)
                 : CGSize(width: floatingCompactWidth, height: floatingCompactHeight)
-        case .spotlight:
-            return CGSize(width: cardWidth, height: headroom(geometry) + 104)
+        case let .spotlight(card):
+            // Room for the Allow / Deny column on a needs-you card.
+            return CGSize(width: cardWidth, height: headroom(geometry) + (card.kind == .needsInput ? 122 : 104))
         case .list:
             let count = CGFloat(min(max(rows, 1), maxRows))
             return CGSize(width: cardWidth, height: headroom(geometry) + listHeadlineHeight + count * rowHeight + (detail ? detailHeight : 0) + 10 + listFooterHeight)

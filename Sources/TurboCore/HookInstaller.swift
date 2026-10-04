@@ -203,4 +203,18 @@ public enum HookInstaller {
         }
         return depth
     }
+
+    // MARK: Permission rules
+
+    /// Adds an allow rule to a Claude Code settings file (`.claude/settings.local.json` in a
+    /// project), keeping everything else in it.
+    public static func addingAllowRule(_ rule: String, to settings: Data?) throws -> Data {
+        var root = try parseRoot(settings)
+        var permissions = root["permissions"] as? [String: Any] ?? [:]
+        var allow = permissions["allow"] as? [String] ?? []
+        if !allow.contains(rule) { allow.append(rule) }
+        permissions["allow"] = allow
+        root["permissions"] = permissions
+        return try serialize(root)
+    }
 }

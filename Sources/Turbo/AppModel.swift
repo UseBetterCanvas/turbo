@@ -48,6 +48,8 @@ struct PendingApproval {
     let token = UUID()
     let tool: String
     let detail: String?
+    /// The permission rule "Always Allow" saves, when one is safe to offer.
+    var rule: String? = nil
     let respond: @Sendable (String) -> Void
 }
 
@@ -68,7 +70,8 @@ struct SessionBoard {
             case .done, .idle: done.append(session)
             }
         }
-        needsYou.sort { $0.lastActivityAt > $1.lastActivityAt }
+        // Waiting longest first: that's the one most likely to be stuck on you.
+        needsYou.sort { ($0.needsInputSince ?? $0.lastActivityAt) < ($1.needsInputSince ?? $1.lastActivityAt) }
         // Longest-running first: that's the one you've been waiting on.
         cooking.sort { ($0.turnStartedAt ?? .distantFuture) < ($1.turnStartedAt ?? .distantFuture) }
         done.sort { ($0.finishedAt ?? $0.lastActivityAt) > ($1.finishedAt ?? $1.lastActivityAt) }
@@ -88,6 +91,8 @@ final class AppModel: ObservableObject {
     @Published private(set) var spotlight: Spotlight?
     /// Done/needs-you cards waiting their turn when several sessions land at once.
     @Published private(set) var spotlightQueue: [Spotlight] = []
+    /// How long the current done card stays up (its countdown bar uses this).
+    @Published private(set) var spotlightSeconds: Double = 4
     /// The pointer is over the island right now (drives hit-testing and hover polish).
     @Published private(set) var pointerInside = false
     /// The pointer has rested on the island long enough to expand it. Lags `pointerInside` a
@@ -106,6 +111,15 @@ final class AppModel: ObservableObject {
     var hoveredRowID: String?
     /// The session whose details are showing in the hover list.
     @Published var detailSessionID: String?
+    /// The row picked with the keyboard on the board.
+    @Published var selectedSessionID: String?
+    /// Finished sessions you've already looked at. The rest count as unseen.
+    @Published private(set) var seen: Set<String> = []
+    /// While set and in the future: no sounds and no done cards. Needs-you still shows, silently.
+    @Published private(set) var quietUntil: Date?
+    /// Waiting sessions Turbo has already nudged you about again.
+    private var nudged: Set<String> = []
+    private let hotKey = GlobalHotKey()
     @Published var popupOpen = false
     @Published var popupPage: PopupPage = .home
 
@@ -132,6 +146,11 @@ final class AppModel: ObservableObject {
     }
 
     var board: SessionBoard { SessionBoard(sessions) }
+    /// The session the tiny island tracks: the one waiting on you longest, else the one cooking longest.
+    var lead: AgentSession? { let b = board; return b.needsYou.first ?? b.cooking.first }
+    /// Finished sessions you haven't opened or dismissed yet.
+    var unseenDone: [AgentSession] { board.done.filter { !seen.contains($0.id) } }
+    var isQuiet: Bool { (quietUntil ?? .distantPast) > Date() }
     var active: [AgentSession] { sessions.filter { $0.phase.isActive } }
     var hasActive: Bool { sessions.contains { $0.phase.isActive } }
     var needsYouCount: Int { sessions.filter { if case .needsInput = $0.phase { return true } else { return false } }.count }
@@ -181,6 +200,7 @@ final class AppModel: ObservableObject {
         }
         pollLogs()
         loops.append(every(seconds: 1) { [weak self] in self?.pollLogs() })
+        loops.append(every(seconds: 15) { [weak self] in self?.nudgeLongWaits() })
         loops.append(every(seconds: 30) { [weak self] in
             guard let self else { return }
             for change in self.store.prune() { self.react(to: change) }
@@ -213,6 +233,8 @@ final class AppModel: ObservableObject {
             .store(in: &forwarding)
 
         updater.start()
+        hotKey.onPress = { [weak self] in self?.hotKeyPressed() }
+        hotKey.register()
 
         island = IslandPanelController(model: self)
         island?.show()
@@ -274,19 +296,23 @@ final class AppModel: ObservableObject {
 
         case let .resumed(session):
             pulses.send(Pulse(agent: session.agent, kind: .beat, tool: session.lastTool))
+            nudged.remove(session.id)
             dropSpotlights(for: session.id, kind: .needsInput)
 
         case let .needsInput(session):
             pulses.send(Pulse(agent: session.agent, kind: .needsInput))
             enqueue(Spotlight(kind: .needsInput, session: session))
             playSound(named: "Tink")
+            seen.remove(session.id)
 
         case let .finished(session):
             pulses.send(Pulse(agent: session.agent, kind: .finish))
             releaseApprovals(for: session.id)
             dropSpotlights(for: session.id, kind: .needsInput)
             // nil duration means we never saw it start — still worth announcing.
-            let worthCelebrating = (session.cookDuration ?? .infinity) >= preferences.minimumCookSeconds
+            seen.remove(session.id)
+            nudged.remove(session.id)
+            let worthCelebrating = (session.cookDuration ?? .infinity) >= preferences.minimumCookSeconds && !isQuiet
             if worthCelebrating {
                 enqueue(Spotlight(kind: .finished, session: session))
                 if session.failed {
@@ -304,6 +330,8 @@ final class AppModel: ObservableObject {
         case let .removed(id):
             dropSpotlights(for: id)
             releaseApprovals(for: id)
+            seen.remove(id)
+            nudged.remove(id)
         }
     }
 
@@ -348,6 +376,7 @@ final class AppModel: ObservableObject {
         guard item.kind == .finished else { return }   // "needs you" stays until resolved or dismissed
         // Several queued? Move a little faster so the line doesn't drag.
         let seconds = spotlightQueue.isEmpty ? preferences.celebrateSeconds : max(2.5, preferences.celebrateSeconds * 0.6)
+        spotlightSeconds = seconds
         spotlightTask = Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
             // Don't yank the card out from under the cursor.
@@ -384,7 +413,7 @@ final class AppModel: ObservableObject {
 
     func islandTapped() {
         if let spotlight {
-            if preferences.returnToTerminalOnClick { open(spotlight.session) }
+            if preferences.returnToTerminalOnClick { open(spotlight.session) } else { markSeen(spotlight.session) }
             advanceSpotlight()
         } else {
             openPopup(.home)
@@ -405,7 +434,7 @@ final class AppModel: ObservableObject {
         let inHost = host.map { $0 == front } ?? HostApp.isTerminal(bundleID: front)
         guard !inHost, ask.isComplete else { respond(""); return }
         let key = "\(Agent.claude.rawValue):\(ask.sessionID)"
-        let pending = PendingApproval(tool: ask.tool, detail: ask.detail, respond: respond)
+        let pending = PendingApproval(tool: ask.tool, detail: ask.detail, rule: ask.cwd == nil ? nil : ask.rule, respond: respond)
         approvals[key, default: []].append(pending)
         if approvals[key]?.count == 1 { showApproval(pending, sessionID: ask.sessionID, cwd: ask.cwd, host: host) }
         Task { @MainActor [weak self] in
@@ -454,7 +483,25 @@ final class AppModel: ObservableObject {
     }
 
     /// Answers a permission prompt from Turbo.
+    /// Allows this request and every identical one in this repo from now on, by adding the
+    /// request's rule to the project's `.claude/settings.local.json`.
+    func alwaysAllow(_ session: AgentSession) {
+        guard let pending = pendingApproval(for: session), let rule = pending.rule, let cwd = session.cwd else { return }
+        let url = URL(fileURLWithPath: cwd).appendingPathComponent(".claude/settings.local.json")
+        do {
+            let existing = try? Data(contentsOf: url)
+            let updated = try HookInstaller.addingAllowRule(rule, to: existing)
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            if let existing { try? existing.write(to: url.appendingPathExtension("turbo-backup")) }
+            try updated.write(to: url, options: .atomic)
+        } catch {
+            NSLog("Turbo: couldn't save the allow rule: \(error.localizedDescription)")
+        }
+        decide(session, allow: true)
+    }
+
     func decide(_ session: AgentSession, allow: Bool) {
+        markSeen(session)
         guard var queue = approvals[session.id], !queue.isEmpty else { return }
         let pending = queue.removeFirst()
         approvals[session.id] = queue.isEmpty ? nil : queue
@@ -470,6 +517,13 @@ final class AppModel: ObservableObject {
 
     /// Takes you to the session: its cloud page, or the app it runs in.
     func open(_ session: AgentSession) {
+        markSeen(session)
+        if popupOpen { closePopup() }
+        // Heading to the terminal: give it the prompt now instead of holding it for Turbo.
+        if let pending = approvals[session.id]?.first {
+            releaseApprovals(for: session.id)
+            handle(AgentEvent(agent: session.agent, sessionID: session.sessionID, kind: .needsInput(message: "Answer in the terminal: " + Self.approvalMessage(tool: pending.tool, detail: pending.detail))))
+        }
         if let link = session.link {
             openLink(link, for: session.agent)
             return
@@ -538,9 +592,67 @@ final class AppModel: ObservableObject {
     }
 
     func dismiss(_ session: AgentSession) {
+        seen.remove(session.id)
         store.remove(id: session.id)
         sessions = store.sorted
         dropSpotlights(for: session.id)
+    }
+
+    func markSeen(_ session: AgentSession) {
+        seen.insert(session.id)
+    }
+
+    // MARK: Triage
+
+    /// Waiting more than a few minutes? Nudge once more, in case the first card got missed.
+    private func nudgeLongWaits(now: Date = Date()) {
+        for session in board.needsYou {
+            guard let since = session.needsInputSince, now.timeIntervalSince(since) >= 180, !nudged.contains(session.id) else { continue }
+            nudged.insert(session.id)
+            playSound(named: "Tink")
+            enqueue(Spotlight(kind: .needsInput, session: session))
+        }
+    }
+
+    /// Quiet for a while (nil turns alerts back on).
+    func setQuiet(for seconds: TimeInterval?) {
+        quietUntil = seconds.map { Date().addingTimeInterval($0) }
+        if seconds != nil {
+            spotlightQueue.removeAll { $0.kind == .finished }
+            if spotlight?.kind == .finished { advanceSpotlight() }
+        }
+    }
+
+    /// ⌃⌥Space: open the board on whatever needs you, or close it.
+    private func hotKeyPressed() {
+        if popupOpen && popupPage == .home { closePopup(); return }
+        openPopup(preferences.hasOnboarded ? .home : .welcome)
+    }
+
+    /// Keyboard triage on the board. Returns false for keys it doesn't use.
+    func handleBoardKey(_ characters: String, keyCode: UInt16) -> Bool {
+        guard popupOpen, popupPage == .home else { return false }
+        let list = board.all
+        guard !list.isEmpty else { return false }
+        let index = list.firstIndex { $0.id == selectedSessionID }
+        let selected = index.map { list[$0] }
+        func select(_ i: Int) { selectedSessionID = list[max(0, min(list.count - 1, i))].id }
+        switch (keyCode, characters.lowercased()) {
+        case (125, _), (_, "j"): select((index ?? -1) + 1)
+        case (126, _), (_, "k"): select((index ?? 1) - 1)
+        case (36, _), (76, _): if let selected { open(selected) }
+        case (_, "a"): if let selected, pendingApproval(for: selected) != nil { decide(selected, allow: true) }
+        case (_, "d"): if let selected, pendingApproval(for: selected) != nil { decide(selected, allow: false) }
+        case (51, _), (_, "x"):
+            guard let selected, !selected.phase.isActive, let i = index else { return true }
+            dismiss(selected)
+            let rest = board.all
+            selectedSessionID = rest.isEmpty ? nil : rest[min(i, rest.count - 1)].id
+        default:
+            if let digit = Int(characters), (1...9).contains(digit), digit <= list.count { open(list[digit - 1]); return true }
+            return false
+        }
+        return true
     }
 
     func clearFinished() {
@@ -549,7 +661,7 @@ final class AppModel: ObservableObject {
     }
 
     private func playSound(named name: String) {
-        guard preferences.playSound else { return }
+        guard preferences.playSound, !isQuiet else { return }
         NSSound(named: NSSound.Name(name))?.play()
     }
 
@@ -557,6 +669,10 @@ final class AppModel: ObservableObject {
 
     func openPopup(_ page: PopupPage = .home) {
         popupPage = page
+        if page == .home {
+            let all = board.all
+            if !all.contains(where: { $0.id == selectedSessionID }) { selectedSessionID = all.first?.id }
+        }
         popup?.open()
     }
 
