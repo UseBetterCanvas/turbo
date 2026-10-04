@@ -619,7 +619,8 @@ struct UpdateRow: View {
         case .available: return "A new version is ready. Turbo will reopen after updating."
         case .downloading: return "Downloading…"
         case .installing: return "Installing. Turbo will reopen in a moment."
-        case .needsAccess: return "Couldn't reach Turbo's releases on GitHub. Check your connection, then try again."
+        // GitHub turned the check away: usually its hourly limit for anonymous checks.
+        case .needsAccess: return "GitHub isn't answering update checks right now (it limits how often Macs can check). Turbo tries again on its own within the hour."
         case let .manualInstall(message): return message
         case .translocated: return "macOS is running Turbo from a temporary copy, so it can't update itself. Fix it once and Turbo reopens from Applications."
         case let .failed(message): return message
