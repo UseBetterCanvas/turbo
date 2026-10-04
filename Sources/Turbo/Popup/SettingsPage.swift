@@ -432,10 +432,7 @@ private struct GeneralSection: View {
                 set: { model.setLaunchAtLogin($0) }
             ))
             RowDivider()
-            SettingRow(title: "Update Turbo", detail: "Copies the install command. Paste it in Terminal.") {
-                Button("Copy Command") { copy(Integrations.installCommand) }
-                    .buttonStyle(SecondaryButtonStyle())
-            }
+            UpdateRow(updater: model.updater)
             RowDivider()
             SettingRow(title: "Welcome tour") {
                 Button("Show") { model.showOnboarding() }.buttonStyle(SecondaryButtonStyle())
@@ -453,6 +450,42 @@ private struct GeneralSection: View {
                 .foregroundStyle(DS.Palette.textSecondary)
         }
         .padding(.horizontal, DS.Space.xs)
+    }
+}
+
+/// "Update" lives here: status on the left, one button on the right.
+struct UpdateRow: View {
+    @ObservedObject var updater: Updater
+
+    var body: some View {
+        SettingRow(title: "Updates", detail: detail) {
+            switch updater.state {
+            case .available:
+                Button("Update") { Task { await updater.install() } }
+                    .buttonStyle(PrimaryButtonStyle())
+            case .checking, .downloading, .installing:
+                ProgressView().controlSize(.small)
+            case .needsAccess:
+                Button("Copy Sign-in Command") { copy("brew install gh && gh auth login") }
+                    .buttonStyle(SecondaryButtonStyle())
+            default:
+                Button("Check Now") { Task { await updater.check() } }
+                    .buttonStyle(SecondaryButtonStyle())
+            }
+        }
+    }
+
+    private var detail: String {
+        switch updater.state {
+        case .idle: return "Turbo checks for new versions on its own."
+        case .checking: return "Checking…"
+        case .upToDate: return "You're on the latest version."
+        case .available: return "A new version is ready. Turbo will reopen after updating."
+        case .downloading: return "Downloading…"
+        case .installing: return "Installing. Turbo will reopen in a moment."
+        case .needsAccess: return "Turbo's repo is private. Sign in to GitHub in Terminal once, then check again."
+        case let .failed(message): return message
+        }
     }
 }
 

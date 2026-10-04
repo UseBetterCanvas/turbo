@@ -196,6 +196,26 @@ final class CodexCloudTests: XCTestCase {
     }
 }
 
+final class UpdateInfoTests: XCTestCase {
+    let release = #"{"tag_name":"latest-build","published_at":"2026-10-04T06:25:49Z","body":"Built from main @ 4061f61.\n\n**Install**...","assets":[{"id":609300000,"name":"Turbo.zip","size":2240349}]}"#
+
+    func testParseRelease() throws {
+        let info = try XCTUnwrap(UpdateInfo.parse(release: Data(release.utf8)))
+        XCTAssertEqual(info.commit, "4061f61")
+        XCTAssertEqual(info.assetID, 609300000)
+        XCTAssertEqual(info.assetSize, 2240349)
+        XCTAssertNil(UpdateInfo.parse(release: Data(#"{"body":"no commit","assets":[]}"#.utf8)))
+    }
+
+    func testNewerComparison() throws {
+        let info = try XCTUnwrap(UpdateInfo.parse(release: Data(release.utf8)))
+        XCTAssertFalse(info.isNewer(thanInstalled: "4061f61fa4715b7270d71280f24ffcb7de759fe2"))
+        XCTAssertTrue(info.isNewer(thanInstalled: "2cf2267d91d6f2fb6db717ec5a7785b396d1a0b0"))
+        XCTAssertFalse(info.isNewer(thanInstalled: "dev"))
+        XCTAssertFalse(info.isNewer(thanInstalled: nil))
+    }
+}
+
 final class HTTPTests: XCTestCase {
     func testParseAndRoute() throws {
         let body = #"{"hook_event_name":"Stop","session_id":"z"}"#

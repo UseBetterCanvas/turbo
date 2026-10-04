@@ -72,6 +72,7 @@ final class AppModel: ObservableObject {
     let preferences = Preferences()
     let neighbors = NotchNeighbors()
     let pulses = PassthroughSubject<Pulse, Never>()
+    let updater = Updater()
 
     @Published private(set) var sessions: [AgentSession] = []
     @Published private(set) var spotlight: Spotlight?
@@ -187,6 +188,8 @@ final class AppModel: ObservableObject {
                 if enabled { self?.codexCloud.start() } else { self?.codexCloud.stop() }
             }
             .store(in: &forwarding)
+
+        updater.start()
 
         island = IslandPanelController(model: self)
         island?.show()

@@ -13,6 +13,7 @@ struct SessionsPage: View {
             if let error = model.serverError {
                 Callout(symbol: "", text: error, tone: .bad)
             }
+            UpdateBanner(updater: model.updater)
             if !Integrations.isClaudeInstalled && !prefs.cloudEnabled {
                 SetupBanner()
             }
@@ -190,6 +191,29 @@ struct SessionRowView: View {
             break
         }
         return parts.joined(separator: " · ")
+    }
+}
+
+/// Shown on the board when a new version is ready.
+private struct UpdateBanner: View {
+    @ObservedObject var updater: Updater
+
+    var body: some View {
+        if updater.updateAvailable {
+            HStack(spacing: DS.Space.m) {
+                Image(systemName: "arrow.down.circle.fill")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(DS.Palette.brandText)
+                Text("A new version of Turbo is ready.")
+                    .font(DS.Typography.bodyStrong)
+                Spacer()
+                Button("Update") { Task { await updater.install() } }
+                    .buttonStyle(PrimaryButtonStyle())
+            }
+            .padding(.horizontal, DS.Space.l)
+            .padding(.vertical, DS.Space.s)
+            .background(RoundedRectangle(cornerRadius: DS.Radius.l, style: .continuous).fill(DS.Palette.card))
+        }
     }
 }
 
