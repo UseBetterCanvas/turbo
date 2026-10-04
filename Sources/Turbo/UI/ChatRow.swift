@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 import TurboCore
 
@@ -260,7 +261,16 @@ struct UpdateChip: View {
 
     private var help: String {
         if case .translocated = updater.state { return "macOS is running a temporary copy. Fix it once so updates can land." }
+        if case let .manualInstall(message) = updater.state { return message + " The command is copied; paste it in Terminal." }
         return "Install the new version. Turbo reopens in a moment."
+    }
+
+    /// Whether the chip is showing, so the footer can make room for it.
+    static func isShowing(_ updater: Updater) -> Bool {
+        switch updater.state {
+        case .available, .downloading, .installing, .translocated, .manualInstall: return true
+        default: return updater.installError != nil
+        }
     }
 
     private var content: (title: String, symbol: String, action: () -> Void)? {
@@ -273,6 +283,15 @@ struct UpdateChip: View {
             return ("Installing", "arrow.down.circle.fill", {})
         case .translocated:
             return ("Fix & Relaunch", "wrench.and.screwdriver.fill", { updater.fixTranslocation() })
+        case .manualInstall:
+            // Turbo can't replace itself here: hand over the one-line install and open Terminal.
+            return ("Install in Terminal", "terminal.fill", {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(Integrations.installCommand, forType: .string)
+                if let terminal = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.Terminal") {
+                    NSWorkspace.shared.openApplication(at: terminal, configuration: NSWorkspace.OpenConfiguration())
+                }
+            })
         default:
             if updater.installError != nil {
                 return ("Retry Update", "arrow.clockwise", { Task { await updater.retryInstall() } })
