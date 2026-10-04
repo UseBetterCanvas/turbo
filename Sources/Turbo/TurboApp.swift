@@ -57,7 +57,8 @@ final class StatusItemController: NSObject {
         button.image = image
         let count = waiting > 0 ? waiting : cooking
         button.title = count > 0 ? " \(count)" : ""
-        button.toolTip = waiting > 0 ? "\(waiting) session\(waiting == 1 ? "" : "s") need you" : cooking > 0 ? "\(cooking) cooking" : "Turbo"
+        button.toolTip = (waiting > 0 ? "\(waiting) need you" : cooking > 0 ? "\(cooking) cooking" : "Turbo")
+            + (model.isQuiet ? " · Quiet" : "") + (model.hotKeyAvailable ? " · ⌃⌥Space" : "")
     }
 
     @objc private func clicked() {
@@ -65,6 +66,13 @@ final class StatusItemController: NSObject {
             let menu = NSMenu()
             menu.addItem(withTitle: "Open Turbo", action: #selector(openBoard), keyEquivalent: "").target = self
             menu.addItem(withTitle: "Open Visualizer", action: #selector(openVisualizer), keyEquivalent: "").target = self
+            menu.addItem(.separator())
+            if model.isQuiet {
+                menu.addItem(withTitle: "Turn Alerts Back On", action: #selector(resumeAlerts), keyEquivalent: "").target = self
+            } else {
+                menu.addItem(withTitle: "Quiet for 1 Hour", action: #selector(quietHour), keyEquivalent: "").target = self
+                menu.addItem(withTitle: "Quiet Until Tomorrow", action: #selector(quietTomorrow), keyEquivalent: "").target = self
+            }
             menu.addItem(.separator())
             menu.addItem(withTitle: "Quit Turbo", action: #selector(quit), keyEquivalent: "q").target = self
             item.menu = menu
@@ -77,5 +85,11 @@ final class StatusItemController: NSObject {
 
     @objc private func openBoard() { model.openPopup(.home) }
     @objc private func openVisualizer() { model.openVisualizer() }
+    @objc private func quietHour() { model.setQuiet(for: 3600) }
+    @objc private func resumeAlerts() { model.setQuiet(for: nil) }
+    @objc private func quietTomorrow() {
+        let morning = Calendar.current.nextDate(after: Date(), matching: DateComponents(hour: 8), matchingPolicy: .nextTime) ?? Date().addingTimeInterval(12 * 3600)
+        model.setQuiet(for: morning.timeIntervalSinceNow)
+    }
     @objc private func quit() { NSApp.terminate(nil) }
 }

@@ -135,7 +135,7 @@ private struct PopupContent: View {
                     HeaderButton(symbol: "gearshape", help: "Settings") { model.popupPage = .settings }
                 }
             }
-            HeaderButton(symbol: "xmark", help: "Close (esc)") { model.closePopup() }
+            HeaderButton(symbol: "xmark", help: "Close (Esc)") { model.closePopup() }
         }
         .padding(.horizontal, DS.Space.l)
         .padding(.top, geometry.docked ? 4 : 8)

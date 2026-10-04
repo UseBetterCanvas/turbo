@@ -36,15 +36,42 @@ Turbo lives in the notch, like the iPhone's Dynamic Island, and is always exactl
 1. **A tiny island.** A paw beside the notch when nothing's cooking. While sessions cook:
    a flame for the agent, a timer and a count, which turns gold when any session needs you.
 2. **A medium island.** Hover the tiny island and it grows into a list of every session with
-   its status. It also pops out on its own when a session finishes ("waffle-web is done ·
-   cooked for 3m 12s") or hits a permission prompt. If several land at once they take turns
+   its status. It also pops out on its own when a session finishes ("Done: waffle-web ·
+   3m 12s") or hits a permission prompt. If several land at once they take turns
    ("+2 more"), and "needs you" always cuts the line.
 3. **The pop-up.** Click the island (or the paw in the menu bar) and a panel grows out of the
    notch: every session grouped into **Needs You**, **Cooking** and **Done**, each with an
    **Open** button that goes straight to the thread. Setup and settings live here too.
 
+**Keyboard:** press **⌃⌥Space** anywhere to open the board on whatever needs you. Then
+**J / K** (or the arrows) to move, **Return** to open, **A / D** to allow or deny,
+**X** to dismiss a finished session, and **1 to 9** to jump straight to a session.
+
+**Triage helpers:**
+- Sessions are named by what they were asked ("Fix the flaky syrup tests"), with the repo beside the status.
+- Waiting sessions show how long they've waited, and Turbo nudges you again after 3 minutes.
+- A cooking session with no activity for 5 minutes says so, in case it's stuck.
+- **Always Allow** on a permission prompt saves that exact command to the repo's
+  `.claude/settings.local.json`, so it stops asking.
+- Right-click the menu bar paw for **Quiet for 1 Hour** or **Quiet Until Tomorrow**: no sounds,
+  no done cards, and needs-you still shows silently.
+- The teal dot on the tiny island only counts finished sessions you haven't opened yet.
+
+**Stop:** press **Stop** on any running session (or **S** on the board).
+- Local Claude Code stops before its next step.
+- Local Codex runs get interrupted. Pick one up again with `codex resume`.
+- Claude Code in the cloud stops within a few seconds of its next step. This needs the latest setup script; Settings tells you when yours is out of date.
+- Cowork and Codex cloud can't be reached from outside, so Stop opens them instead.
+
+**Live steps:** rows show Claude's own words for what it's doing ("Waiting for Greptile review on PR #8"). The tiny island briefly grows to show each new step of the session it tracks.
+
+**Updates:** Turbo checks every hour and installs new versions by itself when nothing's cooking. You can turn this off in Settings → General.
+
 **Visualizer:** a fun, full-screen view of the progress, one click away from the hover list
 or the pop-up. Every tool call is a beat and every finished session sets off a finale.
+Turn on **Move With Your Music** (or press **M**) and it pulses to Spotify, Apple Music or whatever
+your Mac is playing, through speakers or AirPods. macOS asks for Screen Recording permission once.
+Turbo only reads the sound.
 
 If another notch app is running (HeyClicky, NotchNook, Alcove…) and the two overlap,
 Settings → Island → Placement can move Turbo just below the notch.
@@ -53,8 +80,8 @@ Settings → Island → Placement can move Turbo just below the notch.
 
 | Agent | How | Setup |
 |---|---|---|
-| **Claude Code (cloud)** on claude.ai/code | A hook in each cloud session posts thin pings to a private [ntfy.sh](https://ntfy.sh) channel. Turbo subscribes to it. | Agents → Claude Code (cloud) → **Copy Setup Script**, then paste it at the end of your cloud environment's Setup script. |
-| **Claude Code** in your terminal or the desktop app | [Hooks](https://code.claude.com/docs/en/hooks) in `~/.claude/settings.json` post to Turbo on `127.0.0.1:47823`. | One click: Agents → **Connect**. |
+| **Claude Code (cloud)** on claude.ai/code | A hook in each cloud session posts thin pings to a private [ntfy.sh](https://ntfy.sh) channel. Turbo subscribes to it. | Settings → Connections → Claude Code (cloud) → **Copy Setup Script**, then paste it at the end of your cloud environment's Setup script. |
+| **Claude Code** in your terminal or the desktop app | [Hooks](https://code.claude.com/docs/en/hooks) in `~/.claude/settings.json` post to Turbo on `127.0.0.1:47823`. | One click: Settings → Connections → **Connect**. |
 | **Codex** (CLI, IDE extension) | Turbo reads Codex's session logs in `~/.codex/sessions/`. | None. |
 | **Codex (cloud)** on chatgpt.com/codex | Turbo asks the Codex CLI for your recent cloud tasks (`codex cloud list --json`) every 20 seconds, using your existing login. | None if the Codex CLI is installed and signed in (`brew install codex && codex login`). |
 | **Cowork** | Cowork doesn't fire hooks, so Turbo reads each session's `audit.jsonl` in Claude Desktop's data folder. | None. |

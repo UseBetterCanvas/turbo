@@ -10,6 +10,11 @@ final class EventServer {
     /// (allow/deny JSON, or "" to let Claude Code ask in the terminal as usual).
     var onPermission: (@MainActor (HTTPRequest, @escaping @Sendable (String) -> Void) -> Void)?
 
+    /// Sessions you asked to stop. The gate hook checks it before every tool call.
+    var stops: StopRequests?
+    /// A gate told a session to stop.
+    var onStopped: (@MainActor (String) -> Void)?
+
     private var listener: NWListener?
     private let queue = DispatchQueue(label: "turbo.event-server")
 
@@ -66,7 +71,15 @@ final class EventServer {
                     self.holdForDecision(request, on: connection)
                     return
                 }
-                self.respond(on: connection, status: "200 OK", body: "ok")
+                if request.path == HookInstaller.gatePath {
+                    // Answer right away: "" carries on, a stop answer ends the turn.
+                    let id = EventParser.jsonObject(request.body)?["session_id"] as? String ?? ""
+                    let stop = self.stops?.consume(id) ?? false
+                    self.respond(on: connection, status: "200 OK", body: StopRequests.gateResponse(stop: stop), contentType: "application/json")
+                    if stop, let stopped = self.onStopped { Task { @MainActor in stopped(id) } }
+                } else {
+                    self.respond(on: connection, status: "200 OK", body: "ok")
+                }
                 if let handler = self.onRequest {
                     Task { @MainActor in handler(request) }
                 }

@@ -1,9 +1,9 @@
 import TurboCore
 import SwiftUI
 
-/// Draws the iTunes-style visualizer into a SwiftUI `Canvas`. There's no audio to react to, so
-/// agent activity plays the part of the music: every tool call is a beat, a new prompt is a
-/// drop, and a finished turn is the finale.
+/// Draws the iTunes-style visualizer into a SwiftUI `Canvas`. Agent activity drives it: every
+/// tool call is a beat, a new prompt is a drop, and a finished turn is the finale. With "Move
+/// With Your Music" on, whatever's playing sets the energy and its beats kick too.
 ///
 /// State lives in this reference type and is advanced from inside the Canvas renderer, so the
 /// SwiftUI view tree never re-renders per frame.
@@ -16,6 +16,9 @@ final class VisualizerEngine {
     /// Hues of the agents that are cooking right now. Empty means idle drift.
     var palette: [Double] = []
     var isCooking = false
+    /// What's playing on the Mac, when the visualizer listens to music.
+    var music: (() -> MusicLevels)?
+    private var lastBeatSeen = 0
 
     private struct Particle {
         var p: CGPoint
@@ -209,7 +212,15 @@ final class VisualizerEngine {
     }
 
     private func step(_ dt: Double, aspect: CGFloat) {
-        let base = isCooking ? 0.6 : 0.2
+        var base = isCooking ? 0.6 : 0.2
+        if let levels = music?() {
+            // The music sets the floor; agent steps still kick on top of it.
+            base += levels.level * 1.4 + levels.bass * 0.8
+            if levels.beats != lastBeatSeen {
+                lastBeatSeen = levels.beats
+                kick(0.25 + levels.bass * 0.6, hue: hue + .random(in: -0.06...0.06))
+            }
+        }
         energy += (base - energy) * (1 - exp(-dt * 0.8))
         clock += dt * (0.35 + energy * 0.85)
 

@@ -22,7 +22,7 @@ struct SessionsPage: View {
                 EmptyState(
                     symbol: "pawprint",
                     title: "Nothing cooking",
-                    message: "Start a session in Claude Code, Codex or Cowork and it shows up here."
+                    message: "Start a session in Claude Code, Codex or Cowork and it'll show up here."
                 ) {
                     Button("Try a Demo") {
                         model.closePopup()
@@ -34,8 +34,8 @@ struct SessionsPage: View {
             } else {
                 TimelineView(.periodic(from: .now, by: 1)) { context in
                     VStack(alignment: .leading, spacing: DS.Space.l) {
-                        SessionGroup(title: "Needs you", tone: .attention, sessions: board.needsYou, now: context.date)
-                        SessionGroup(title: "Cooking", tone: .info, sessions: board.cooking, now: context.date)
+                        SessionGroup(title: "Needs You", tone: .attention, sessions: board.needsYou, now: context.date)
+                        SessionGroup(title: "Cooking", tone: .neutral, sessions: board.cooking, now: context.date)
                         SessionGroup(title: "Done", tone: .good, sessions: board.done, now: context.date) {
                             Button("Clear") { withAnimation(DS.Motion.base) { model.clearFinished() } }
                                 .buttonStyle(.plain)
@@ -106,23 +106,16 @@ struct SessionRowView: View {
 
     var body: some View {
         HStack(spacing: DS.Space.m) {
-            ZStack(alignment: .bottomTrailing) {
-                IconTile(symbol: session.agent.symbol, tint: session.agent.tint, size: 32)
-                Circle()
-                    .fill(dotColor)
-                    .frame(width: 9, height: 9)
-                    .overlay(Circle().strokeBorder(DS.Palette.card, lineWidth: 2))
-                    .offset(x: 2, y: 2)
-            }
+            SessionIcon(session: session, size: 32)
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(session.projectName)
                     .font(DSFont.sans(13.5, .bold))
                     .foregroundStyle(DS.Palette.textPrimary)
                     .lineLimit(1)
-                Text(detail)
+                Text(model.approvalErrors[session.id] ?? detail)
                     .font(DSFont.sans(12, .medium).monospacedDigit())
-                    .foregroundStyle(isWaiting ? DS.Palette.gold : DS.Palette.textSecondary)
+                    .foregroundStyle(model.approvalErrors[session.id] != nil ? DS.Palette.bad : isWaiting ? DS.Palette.gold : DS.Palette.textSecondary)
                     .lineLimit(1)
                     .truncationMode(.tail)
             }
@@ -139,28 +132,43 @@ struct SessionRowView: View {
                 .foregroundStyle(DS.Palette.textTertiary)
                 .help("Dismiss")
             }
-            if model.pendingApproval(for: session) != nil {
+            if let pending = model.pendingApproval(for: session) {
                 Button("Deny") { model.decide(session, allow: false) }
                     .buttonStyle(BCButtonStyle(variant: .secondary, size: .sm))
+                if let rule = pending.rule {
+                    Button("Always Allow") { model.alwaysAllow(session) }
+                        .buttonStyle(BCButtonStyle(variant: .secondary, size: .sm))
+                        .help("Allows \(rule) in this repo from now on")
+                }
                 Button("Allow") { model.decide(session, allow: true) }
                     .buttonStyle(BCButtonStyle(variant: .primary, size: .sm))
-            } else if canOpen {
-                Button(isWaiting ? "Respond" : "Open") { model.open(session) }
-                    .buttonStyle(BCButtonStyle(variant: isWaiting ? .primary : .secondary, size: .sm))
+            } else {
+                if hovering || isSelected { StopButton(session: session) }
+                if canOpen {
+                    Button("Open") { model.open(session) }
+                        .buttonStyle(BCButtonStyle(variant: isWaiting ? .primary : .secondary, size: .sm))
+                }
             }
         }
         .padding(.horizontal, DS.Space.m)
         .padding(.vertical, 10)
-        .background(hovering ? DS.Palette.overlay : Color.clear)
+        .background(hovering || isSelected ? DS.Palette.overlay : Color.clear)
+        .overlay(alignment: .leading) {
+            // The keyboard's pick: J/K to move, Return to open, A/D to answer.
+            if isSelected { Rectangle().fill(DS.Palette.brand).frame(width: 2) }
+        }
         .contentShape(Rectangle())
         .onHover { hovering = $0 }
         .onTapGesture(count: 2) { model.open(session) }
         .contextMenu {
             if canOpen { Button("Open") { model.open(session) } }
+            if model.stopMethod(for: session) != nil { Button("Stop") { model.stop(session) } }
             Button("Dismiss") { model.dismiss(session) }
         }
         .animation(hovering ? nil : DS.Motion.out, value: hovering)
     }
+
+    private var isSelected: Bool { model.selectedSessionID == session.id }
 
     private var isWaiting: Bool {
         if case .needsInput = session.phase { return true }
@@ -174,7 +182,7 @@ struct SessionRowView: View {
     private var dotColor: Color {
         switch session.phase {
         case .needsInput: return DS.Palette.gold
-        case .cooking: return DS.Palette.brandText
+        case .cooking: return DS.Palette.textSecondary
         case .done: return session.failed ? DS.Palette.bad : DS.Palette.ok
         case .idle: return DS.Palette.textTertiary
         }
@@ -185,9 +193,10 @@ struct SessionRowView: View {
         var parts = [session.place ?? session.agent.displayName]
         switch session.phase {
         case let .needsInput(message):
-            parts.append(message ?? "Waiting on a permission prompt")
+            parts.append(message ?? "Needs your OK")
+            if let since = session.needsInputSince { parts.append("waiting " + Format.clock(now.timeIntervalSince(since))) }
         case .cooking:
-            parts.append(session.activity)
+            parts.append(session.activityDetail ?? session.activity)
             if let start = session.turnStartedAt { parts.append(Format.clock(now.timeIntervalSince(start))) }
         case .done:
             if session.failed { parts.append("Failed") }

@@ -52,6 +52,11 @@ public struct AgentEvent: Equatable, Sendable {
     public var link: URL?
     /// What the user asked (local sessions only; cloud pings never include it).
     public var prompt: String?
+    /// What the agent says it's doing right now, in its own words: a command's description
+    /// ("Wait for Greptile review on PR #8") or the task it's working on.
+    public var activityDetail: String?
+    /// The session log a local agent is writing (Codex rollouts).
+    public var logPath: String?
     public var date: Date
 
     public init(
@@ -76,6 +81,18 @@ public struct AgentEvent: Equatable, Sendable {
         self.link = link
         self.prompt = prompt
         self.date = date
+    }
+
+    func with(logPath: String?) -> AgentEvent {
+        var copy = self
+        copy.logPath = logPath
+        return copy
+    }
+
+    func with(activityDetail: String?) -> AgentEvent {
+        var copy = self
+        copy.activityDetail = activityDetail
+        return copy
     }
 }
 
@@ -118,7 +135,24 @@ public enum EventParser {
             transcriptPath: obj["transcript_path"] as? String,
             prompt: obj["prompt"] as? String,
             date: now
-        )
+        ).with(activityDetail: activityDetail(from: obj))
+    }
+
+    /// The agent's own one-line description of what it's doing. Claude Code writes one for each
+    /// command and subagent, and an "active form" for the task in progress on its todo list.
+    /// Cloud pings carry it as `activity`.
+    static func activityDetail(from obj: [String: Any]) -> String? {
+        var text = obj["activity"] as? String
+        if text == nil, let input = obj["tool_input"] as? [String: Any] {
+            if let todos = input["todos"] as? [[String: Any]],
+               let current = todos.first(where: { $0["status"] as? String == "in_progress" }) {
+                text = (current["activeForm"] as? String) ?? (current["content"] as? String)
+            } else {
+                text = input["description"] as? String
+            }
+        }
+        guard let line = text?.split(whereSeparator: \.isNewline).first?.trimmingCharacters(in: .whitespaces), !line.isEmpty else { return nil }
+        return line.count > 80 ? String(line.prefix(79)) + "…" : line
     }
 
     /// A Claude Code permission prompt, from the `PermissionRequest` hook.
@@ -131,6 +165,9 @@ public enum EventParser {
         /// False when the detail had to be shortened. Turbo then leaves the prompt to the
         /// terminal, so nobody allows a command they couldn't read in full.
         public var isComplete: Bool = true
+        /// A permission rule that allows exactly this request from now on, when one is safe to
+        /// offer: `Bash(npm test)` for a one-line command.
+        public var rule: String? = nil
     }
 
     public static func parsePermissionRequest(_ data: Data) -> PermissionAsk? {
@@ -146,9 +183,20 @@ public enum EventParser {
         let detail = full.map { $0.count > limit ? String($0.prefix(limit - 1)) + "…" : $0 }
         return PermissionAsk(
             sessionID: (obj["session_id"] as? String) ?? "claude", cwd: obj["cwd"] as? String, tool: tool, detail: detail,
-            isComplete: (full?.count ?? 0) <= limit
+            isComplete: (full?.count ?? 0) <= limit,
+            rule: allowRule(tool: tool, input: input)
         )
     }
+
+    static func allowRule(tool: String, input: [String: Any]) -> String? {
+        guard tool == "Bash", let command = (input["command"] as? String)?.trimmingCharacters(in: .whitespaces),
+              !command.isEmpty, command.count <= 100, !command.contains(where: \.isNewline),
+              !command.contains("(") && !command.contains(")") else { return nil }
+        return "Bash(\(command))"
+    }
+
+    /// Denies the request and stops Claude's turn.
+    public static let permissionStop = #"{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"deny","message":"Stopped from Turbo","interrupt":true}}}"#
 
     /// The JSON a PermissionRequest hook prints to allow or deny.
     public static func permissionDecision(allow: Bool) -> String {
@@ -270,7 +318,7 @@ public enum EventParser {
         return (id, event)
     }
 
-    static func jsonObject(_ data: Data) -> [String: Any]? {
+    public static func jsonObject(_ data: Data) -> [String: Any]? {
         (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
     }
 }

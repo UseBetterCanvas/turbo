@@ -13,6 +13,8 @@ enum PopupPage: String, Identifiable {
 /// terminal stays the active app underneath.
 final class PopupPanel: NSPanel {
     var onEscape: (() -> Void)?
+    /// Keys the board uses for triage. Returns true when it handled the key.
+    var onKey: ((String, UInt16) -> Bool)?
 
     init() {
         super.init(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
@@ -36,7 +38,10 @@ final class PopupPanel: NSPanel {
     }
 
     override func keyDown(with event: NSEvent) {
-        if event.keyCode == 53 { onEscape?() } else { super.keyDown(with: event) }
+        if event.keyCode == 53 { onEscape?(); return }
+        let plain = event.modifierFlags.intersection([.command, .control, .option]).isEmpty
+        if plain, onKey?(event.charactersIgnoringModifiers ?? "", event.keyCode) == true { return }
+        super.keyDown(with: event)
     }
 }
 
@@ -75,6 +80,7 @@ final class PopupController {
         hosting.frame = NSRect(origin: .zero, size: Self.canvas)
         panel.contentView = hosting
         panel.onEscape = { [weak self] in self?.close() }
+        panel.onKey = { [weak model] characters, keyCode in model?.handleBoardKey(characters, keyCode: keyCode) ?? false }
     }
 
     func open() {
@@ -90,8 +96,12 @@ final class PopupController {
 
         if clickMonitor == nil {
             // Clicking anywhere outside closes it, like a popover.
+            // Not during the first-run tour, where a stray click would lose your place.
             clickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
-                Task { @MainActor in self?.close() }
+                Task { @MainActor in
+                    guard let self, self.model.popupPage != .welcome else { return }
+                    self.close()
+                }
             }
         }
     }

@@ -40,10 +40,8 @@ struct AgentBadge: View {
 
     var body: some View {
         ZStack {
-            Circle().fill(agent.tint.opacity(0.22))
-            Image(systemName: agent.symbol)
-                .font(.system(size: size * 0.48, weight: .bold))
-                .foregroundStyle(agent.tint)
+            Circle().fill(DS.Palette.overlay)
+            AgentGlyph(agent: agent, size: size * 0.56)
         }
         .frame(width: size, height: size)
     }
@@ -72,9 +70,13 @@ extension AgentSession {
     func statusText(now: Date) -> String {
         switch phase {
         case .cooking:
-            return "\(activity) · " + Format.clock(now.timeIntervalSince(turnStartedAt ?? now))
+            // Quiet a while? It may be stuck, or thinking hard. Either way, worth a look.
+            let silent = now.timeIntervalSince(lastActivityAt)
+            let doing = silent >= 300 ? "No activity for \(Format.duration(silent))" : (activityDetail ?? activity)
+            return "\(doing) · " + Format.clock(now.timeIntervalSince(turnStartedAt ?? now))
         case let .needsInput(message):
-            return message.map { "Needs your OK: \($0)" } ?? "Needs your OK"
+            let waited = needsInputSince.map { " · " + Format.clock(now.timeIntervalSince($0)) } ?? ""
+            return (message.map { "Needs your OK: \($0)" } ?? "Needs your OK") + waited
         case .done:
             let ago = now.timeIntervalSince(finishedAt ?? lastActivityAt)
             let when = ago < 60 ? "just now" : Format.duration(ago) + " ago"
@@ -126,5 +128,5 @@ func headline(for board: SessionBoard, now: Date) -> String {
     } else if !board.done.isEmpty && parts.isEmpty {
         parts.append("\(board.done.count) done")
     }
-    return parts.isEmpty ? "Nothing cooking right now" : parts.joined(separator: " · ")
+    return parts.isEmpty ? "Nothing cooking" : parts.joined(separator: " · ")
 }
