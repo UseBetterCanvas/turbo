@@ -277,9 +277,7 @@ private struct SpotlightCard: View {
 
                 VStack(alignment: .leading, spacing: 3) {
                     HStack(spacing: 6) {
-                        Image(systemName: session.agent.symbol)
-                            .font(.system(size: 10, weight: .bold))
-                            .foregroundStyle(session.agent.tint)
+                        AgentGlyph(agent: session.agent, size: 12)
                         Text(title(for: session))
                             .font(DSFont.sans(14, .bold))
                             .foregroundStyle(.white)
@@ -516,8 +514,17 @@ private struct SessionDetail: View {
             if let text = latest ?? Format.snippet(session.summary, limit: 200) {
                 labeled(session.phase.isActive ? "Latest" : "Result", text)
             }
+            if session.phase == .cooking, let now = session.activityDetail {
+                labeled("Now", now)
+            }
             if case let .needsInput(message) = session.phase, let message {
                 labeled("Needs", message)
+            }
+            if let error = model.approvalErrors[session.id] {
+                Text(error)
+                    .font(DSFont.sans(11, .medium))
+                    .foregroundStyle(DS.Palette.bad)
+                    .lineLimit(2)
             }
             if !session.recentSteps.isEmpty {
                 HStack(spacing: 4) {
@@ -556,9 +563,12 @@ private struct SessionDetail: View {
                     }
                     Button("Allow") { model.decide(session, allow: true) }
                         .buttonStyle(BCButtonStyle(variant: .primary, size: .sm))
-                } else if session.link != nil || session.hostAppBundleID != nil {
-                    Button("Open") { model.open(session) }
-                        .buttonStyle(BCButtonStyle(variant: .secondary, size: .sm))
+                } else {
+                    StopButton(session: session)
+                    if model.canOpen(session) {
+                        Button("Open") { model.open(session) }
+                            .buttonStyle(BCButtonStyle(variant: .secondary, size: .sm))
+                    }
                 }
             }
         }
@@ -637,7 +647,7 @@ private struct IdleIsland: View {
                         Circle().fill(DS.Palette.ok).frame(width: 5, height: 5).offset(x: 4, y: -3)
                     }
                 }
-                .help(done > 0 ? "\(done) finished, not opened yet" : "Turbo · ⌃⌥Space")
+                .help(done > 0 ? "\(done) finished, not opened yet" : (model.hotKeyAvailable ? "Turbo · ⌃⌥Space" : "Turbo"))
                 .frame(width: geometry.docked ? IslandLayout.idleSideWidth : 28)
             if geometry.docked && geometry.hasNotch {
                 Color.clear.frame(width: geometry.notchSize.width)
@@ -699,7 +709,7 @@ struct SessionRow: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            AgentBadge(agent: session.agent, size: 26)
+            SessionIcon(session: session, size: 28)
             VStack(alignment: .leading, spacing: 2) {
                 Text(session.projectName)
                     .font(DSFont.sans(12.5, .bold))
@@ -713,18 +723,6 @@ struct SessionRow: View {
                     .numericTransition()
             }
             Spacer(minLength: 0)
-            switch session.phase {
-            case .cooking:
-                CookingFlame(tint: DS.Palette.textPrimary, size: 12)
-            case .needsInput:
-                Image(systemName: "hand.raised.fill").foregroundStyle(DS.Palette.gold).font(.system(size: 12))
-            case .done:
-                Image(systemName: session.failed ? "xmark.circle.fill" : "checkmark.circle.fill")
-                    .foregroundStyle(session.failed ? DS.Palette.bad : DS.Palette.ok)
-                    .font(.system(size: 13))
-            case .idle:
-                EmptyView()
-            }
         }
     }
 }

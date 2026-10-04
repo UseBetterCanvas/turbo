@@ -50,6 +50,8 @@ struct PendingApproval {
     let detail: String?
     /// The permission rule "Always Allow" saves, when one is safe to offer.
     var rule: String? = nil
+    /// The project the request came from. Always Allow writes its rule here.
+    var cwd: String? = nil
     let respond: @Sendable (String) -> Void
 }
 
@@ -119,7 +121,23 @@ final class AppModel: ObservableObject {
     @Published private(set) var quietUntil: Date?
     /// Waiting sessions Turbo has already nudged you about again.
     private var nudged: Set<String> = []
+    /// Set while Turbo updates a session's message itself, so it doesn't alert you again.
+    private var updatingQuietly = false
+    /// Why the last Always Allow couldn't be saved, by session.
+    @Published private(set) var approvalErrors: [String: String] = [:]
     private let hotKey = GlobalHotKey()
+    private let stops = StopRequests()
+    /// Sessions you've pressed Stop on that haven't stopped yet.
+    @Published private(set) var stopping: Set<String> = []
+    /// Whether Claude Code's hooks include the stop gate (cached; reading settings per frame is wasteful).
+    @Published private(set) var claudeStopReady = false
+
+    func refreshIntegrations() {
+        let ready = Integrations.isClaudeStopInstalled
+        if ready != claudeStopReady { claudeStopReady = ready }
+    }
+    /// False when another app already owns ⌃⌥Space.
+    @Published private(set) var hotKeyAvailable = false
     @Published var popupOpen = false
     @Published var popupPage: PopupPage = .home
 
@@ -178,12 +196,14 @@ final class AppModel: ObservableObject {
         server.onRequest = { [weak self] request in
             guard let self else { return }
             // Count any hook call as a sign of life, even ones we don't act on (like tests).
-            if request.path == "/hook/claude" { self.lastHeard[.claude] = Date() }
+            if request.path == "/hook/claude" || request.path == HookInstaller.gatePath { self.lastHeard[.claude] = Date() }
             if request.path == "/hook/codex" { self.lastHeard[.codex] = Date() }
             guard let event = EventRouter.event(for: request) else { return }
             self.handle(event)
         }
         server.onFailure = { [weak self] message in self?.serverError = message }
+        server.stops = stops
+        server.onStopped = { [weak self] id in self?.finishStopped(agent: .claude, sessionID: id) }
         server.onPermission = { [weak self] request, respond in
             guard let self else { respond(""); return }
             self.lastHeard[.claude] = Date()
@@ -200,7 +220,15 @@ final class AppModel: ObservableObject {
         }
         pollLogs()
         loops.append(every(seconds: 1) { [weak self] in self?.pollLogs() })
-        loops.append(every(seconds: 15) { [weak self] in self?.nudgeLongWaits() })
+        // Already connected? Bring Turbo's own hooks up to date (adds Stop and approvals).
+        if Integrations.isClaudeInstalled && !(Integrations.isClaudeStopInstalled && Integrations.isClaudeApprovalInstalled) {
+            try? Integrations.installClaude()
+        }
+        refreshIntegrations()
+        loops.append(every(seconds: 15) { [weak self] in
+            self?.nudgeLongWaits()
+            self?.refreshIntegrations()
+        })
         loops.append(every(seconds: 30) { [weak self] in
             guard let self else { return }
             for change in self.store.prune() { self.react(to: change) }
@@ -232,9 +260,14 @@ final class AppModel: ObservableObject {
             }
             .store(in: &forwarding)
 
+        updater.autoInstall = { [weak self] in
+            guard let self, self.preferences.autoUpdate else { return false }
+            // Relaunching clears the board, so only when nothing's cooking or waiting on you.
+            return !self.hasActive && !self.popupOpen && self.approvals.isEmpty
+        }
         updater.start()
         hotKey.onPress = { [weak self] in self?.hotKeyPressed() }
-        hotKey.register()
+        hotKeyAvailable = hotKey.register()
 
         island = IslandPanelController(model: self)
         island?.show()
@@ -301,9 +334,15 @@ final class AppModel: ObservableObject {
 
         case let .needsInput(session):
             pulses.send(Pulse(agent: session.agent, kind: .needsInput))
-            enqueue(Spotlight(kind: .needsInput, session: session))
-            playSound(named: "Tink")
             seen.remove(session.id)
+            if updatingQuietly {
+                // Same wait, new words: refresh any card that's showing, no new alert.
+                if spotlight?.session.id == session.id { spotlight = Spotlight(kind: .needsInput, session: session) }
+                spotlightQueue = spotlightQueue.map { $0.session.id == session.id ? Spotlight(kind: $0.kind, session: session) : $0 }
+            } else {
+                enqueue(Spotlight(kind: .needsInput, session: session))
+                playSound(named: "Tink")
+            }
 
         case let .finished(session):
             pulses.send(Pulse(agent: session.agent, kind: .finish))
@@ -312,6 +351,8 @@ final class AppModel: ObservableObject {
             // nil duration means we never saw it start — still worth announcing.
             seen.remove(session.id)
             nudged.remove(session.id)
+            stopping.remove(session.id)
+            stops.cancel(session.sessionID)
             let worthCelebrating = (session.cookDuration ?? .infinity) >= preferences.minimumCookSeconds && !isQuiet
             if worthCelebrating {
                 enqueue(Spotlight(kind: .finished, session: session))
@@ -434,7 +475,7 @@ final class AppModel: ObservableObject {
         let inHost = host.map { $0 == front } ?? HostApp.isTerminal(bundleID: front)
         guard !inHost, ask.isComplete else { respond(""); return }
         let key = "\(Agent.claude.rawValue):\(ask.sessionID)"
-        let pending = PendingApproval(tool: ask.tool, detail: ask.detail, rule: ask.cwd == nil ? nil : ask.rule, respond: respond)
+        let pending = PendingApproval(tool: ask.tool, detail: ask.detail, rule: ask.cwd == nil ? nil : ask.rule, cwd: ask.cwd, respond: respond)
         approvals[key, default: []].append(pending)
         if approvals[key]?.count == 1 { showApproval(pending, sessionID: ask.sessionID, cwd: ask.cwd, host: host) }
         Task { @MainActor [weak self] in
@@ -450,9 +491,18 @@ final class AppModel: ObservableObject {
             } else {
                 // The prompt is now waiting in the terminal. Say so instead of offering buttons
                 // that no longer work.
-                self.handle(AgentEvent(agent: .claude, sessionID: ask.sessionID, kind: .needsInput(message: "Answer in the terminal: " + Self.approvalMessage(tool: pending.tool, detail: pending.detail))))
+                if let session = self.store.sessions[key] {
+                    self.updateWaitingMessage(session, to: "Answer in the terminal: " + Self.approvalMessage(tool: pending.tool, detail: pending.detail))
+                }
             }
         }
+    }
+
+    /// Changes what a waiting session says, without alerting you again.
+    private func updateWaitingMessage(_ session: AgentSession, to message: String) {
+        updatingQuietly = true
+        defer { updatingQuietly = false }
+        handle(AgentEvent(agent: session.agent, sessionID: session.sessionID, kind: .needsInput(message: message)))
     }
 
     private func showApproval(_ pending: PendingApproval, sessionID: String, cwd: String? = nil, host: String? = nil) {
@@ -486,22 +536,28 @@ final class AppModel: ObservableObject {
     /// Allows this request and every identical one in this repo from now on, by adding the
     /// request's rule to the project's `.claude/settings.local.json`.
     func alwaysAllow(_ session: AgentSession) {
-        guard let pending = pendingApproval(for: session), let rule = pending.rule, let cwd = session.cwd else { return }
+        guard let pending = pendingApproval(for: session), let rule = pending.rule, let cwd = pending.cwd else { return }
         let url = URL(fileURLWithPath: cwd).appendingPathComponent(".claude/settings.local.json")
         do {
-            let existing = try? Data(contentsOf: url)
+            // A file that exists but can't be read stops here, before anything is overwritten.
+            let existing: Data? = FileManager.default.fileExists(atPath: url.path) ? try Data(contentsOf: url) : nil
             let updated = try HookInstaller.addingAllowRule(rule, to: existing)
             try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-            if let existing { try? existing.write(to: url.appendingPathExtension("turbo-backup")) }
+            if let existing { try existing.write(to: url.appendingPathExtension("turbo-backup"), options: .atomic) }
             try updated.write(to: url, options: .atomic)
         } catch {
+            // Leave the prompt up so you can still Allow or Deny it.
+            approvalErrors[session.id] = "Couldn't save Always Allow to .claude/settings.local.json. Allow or Deny this one instead."
             NSLog("Turbo: couldn't save the allow rule: \(error.localizedDescription)")
+            return
         }
+        approvalErrors[session.id] = nil
         decide(session, allow: true)
     }
 
     func decide(_ session: AgentSession, allow: Bool) {
         markSeen(session)
+        approvalErrors[session.id] = nil
         guard var queue = approvals[session.id], !queue.isEmpty else { return }
         let pending = queue.removeFirst()
         approvals[session.id] = queue.isEmpty ? nil : queue
@@ -522,7 +578,8 @@ final class AppModel: ObservableObject {
         // Heading to the terminal: give it the prompt now instead of holding it for Turbo.
         if let pending = approvals[session.id]?.first {
             releaseApprovals(for: session.id)
-            handle(AgentEvent(agent: session.agent, sessionID: session.sessionID, kind: .needsInput(message: "Answer in the terminal: " + Self.approvalMessage(tool: pending.tool, detail: pending.detail))))
+            updateWaitingMessage(session, to: "Answer in the terminal: " + Self.approvalMessage(tool: pending.tool, detail: pending.detail))
+            dropSpotlights(for: session.id)
         }
         if let link = session.link {
             openLink(link, for: session.agent)
@@ -593,13 +650,103 @@ final class AppModel: ObservableObject {
 
     func dismiss(_ session: AgentSession) {
         seen.remove(session.id)
+        nudged.remove(session.id)
         store.remove(id: session.id)
         sessions = store.sorted
         dropSpotlights(for: session.id)
     }
 
+    /// Whether Open has somewhere to go: a page, or the app it runs in.
+    func canOpen(_ session: AgentSession) -> Bool {
+        session.link != nil || session.hostAppBundleID != nil
+    }
+
     func markSeen(_ session: AgentSession) {
         seen.insert(session.id)
+    }
+
+    // MARK: Stop
+
+    enum StopMethod {
+        /// Local Claude Code: the gate hook stops it before its next step.
+        case nextStep
+        /// Local Codex: interrupt the process.
+        case interrupt
+        /// Claude Code in the cloud: the relay checks for stops every few seconds.
+        case cloud
+    }
+
+    /// How Turbo can stop this session, or nil if it can't (Open it to stop it there).
+    func stopMethod(for session: AgentSession) -> StopMethod? {
+        guard session.phase.isActive else { return nil }
+        switch session.agent {
+        case .claude: return claudeStopReady ? .nextStep : nil
+        case .codex: return session.logPath == nil ? nil : .interrupt
+        case .cloud: return preferences.cloudEnabled ? .cloud : nil
+        case .cowork, .codexCloud: return nil
+        }
+    }
+
+    func stop(_ session: AgentSession) {
+        guard let method = stopMethod(for: session) else { open(session); return }
+        markSeen(session)
+        stopping.insert(session.id)
+        // Waiting on a permission prompt? Answer it with "stop" right away.
+        if session.agent == .claude, var queue = approvals[session.id], !queue.isEmpty {
+            let pending = queue.removeFirst()
+            approvals[session.id] = nil
+            pending.respond(EventParser.permissionStop)
+            queue.forEach { $0.respond("") }
+            finishStopped(agent: .claude, sessionID: session.sessionID)
+            return
+        }
+        switch method {
+        case .nextStep:
+            stops.request(session.sessionID)
+        case .interrupt:
+            guard let path = session.logPath else { return }
+            Task.detached(priority: .userInitiated) {
+                let stopped = Self.interruptProcesses(writing: path)
+                await MainActor.run {
+                    let model = AppModel.shared
+                    if stopped { model.finishStopped(agent: .codex, sessionID: session.sessionID) } else { model.stopping.remove(session.id); model.open(session) }
+                }
+            }
+        case .cloud:
+            var request = URLRequest(url: CloudRelay.publishURL(channel: CloudRelay.stopChannel(preferences.cloudChannel)))
+            request.httpMethod = "POST"
+            request.httpBody = Data(CloudRelay.stopMessage(sessionID: session.sessionID).utf8)
+            URLSession.shared.dataTask(with: request).resume()
+        }
+    }
+
+    /// Takes back a Stop that hasn't landed yet.
+    func cancelStop(_ session: AgentSession) {
+        stops.cancel(session.sessionID)
+        stopping.remove(session.id)
+    }
+
+    /// Marks a session stopped: it shows as done, with "Stopped from Turbo".
+    func finishStopped(agent: Agent, sessionID: String) {
+        stopping.remove("\(agent.rawValue):\(sessionID)")
+        handle(AgentEvent(agent: agent, sessionID: sessionID, kind: .turnComplete(summary: "Stopped from Turbo")))
+    }
+
+    /// Sends Ctrl+C (SIGINT) to whatever has this log file open: the Codex run writing it.
+    nonisolated static func interruptProcesses(writing path: String) -> Bool {
+        let lsof = Process()
+        lsof.executableURL = URL(fileURLWithPath: "/usr/sbin/lsof")
+        lsof.arguments = ["-t", path]
+        let pipe = Pipe()
+        lsof.standardOutput = pipe
+        lsof.standardError = FileHandle.nullDevice
+        guard (try? lsof.run()) != nil else { return false }
+        lsof.waitUntilExit()
+        let pids = String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+            .split(whereSeparator: \.isNewline).compactMap { pid_t($0) }
+            .filter { $0 != getpid() }
+        for pid in pids { kill(pid, SIGINT) }
+        return !pids.isEmpty
     }
 
     // MARK: Triage
@@ -640,16 +787,20 @@ final class AppModel: ObservableObject {
         switch (keyCode, characters.lowercased()) {
         case (125, _), (_, "j"): select((index ?? -1) + 1)
         case (126, _), (_, "k"): select((index ?? 1) - 1)
-        case (36, _), (76, _): if let selected { open(selected) }
+        case (36, _), (76, _): if let selected, canOpen(selected) { open(selected) }
         case (_, "a"): if let selected, pendingApproval(for: selected) != nil { decide(selected, allow: true) }
         case (_, "d"): if let selected, pendingApproval(for: selected) != nil { decide(selected, allow: false) }
+        case (_, "s"): if let selected, stopMethod(for: selected) != nil { stop(selected) }
         case (51, _), (_, "x"):
             guard let selected, !selected.phase.isActive, let i = index else { return true }
             dismiss(selected)
             let rest = board.all
             selectedSessionID = rest.isEmpty ? nil : rest[min(i, rest.count - 1)].id
         default:
-            if let digit = Int(characters), (1...9).contains(digit), digit <= list.count { open(list[digit - 1]); return true }
+            if let digit = Int(characters), (1...9).contains(digit), digit <= list.count {
+                if canOpen(list[digit - 1]) { open(list[digit - 1]) } else { selectedSessionID = list[digit - 1].id }
+                return true
+            }
             return false
         }
         return true
@@ -705,8 +856,20 @@ final class AppModel: ObservableObject {
 
     // MARK: Cloud relay
 
+    /// You copied a setup script before, and the current one is different (new features, or
+    /// you changed a setting it depends on). Paste the new one to get them.
+    var cloudScriptOutdated: Bool {
+        !preferences.copiedCloudScript.isEmpty && preferences.copiedCloudScript != cloudSetupScript
+    }
+
+    func copyCloudSetupScript() {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(cloudSetupScript, forType: .string)
+        preferences.copiedCloudScript = cloudSetupScript
+    }
+
     var cloudSetupScript: String {
-        CloudRelay.setupScript(channel: preferences.cloudChannel)
+        CloudRelay.setupScript(channel: preferences.cloudChannel, shareTitles: preferences.cloudShareTitles)
     }
 
     func checkCodexCloudNow() {

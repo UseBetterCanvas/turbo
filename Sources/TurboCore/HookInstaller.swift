@@ -37,6 +37,26 @@ public enum HookInstaller {
 
     public static let approvalEvent = "PermissionRequest"
 
+    // MARK: Stop from Turbo
+
+    public static let gatePath = "/hook/claude/gate"
+
+    /// Before each tool call, Claude asks Turbo whether to keep going. Turbo answers at once
+    /// (empty means carry on), so this adds no wait. Its output is kept because a stop answer
+    /// is JSON Claude reads.
+    public static func claudeGateCommand(port: Int = defaultPort) -> String {
+        "curl -s -m 2 --noproxy '*' -X POST -H 'Content-Type: application/json' --data-binary @- "
+            + "\"http://127.0.0.1:\(port)\(gatePath)?app=${__CFBundleIdentifier:-}&term=${TERM_PROGRAM:-}\" "
+            + "2>/dev/null || true # \(marker)"
+    }
+
+    public static func isClaudeStopInstalled(_ settings: Data?) -> Bool {
+        guard let settings, let root = EventParser.jsonObject(settings),
+              let hooks = root["hooks"] as? [String: Any],
+              let groups = hooks["PreToolUse"] as? [[String: Any]] else { return false }
+        return groups.contains { group in commands(in: group).contains { ($0["command"] as? String)?.contains(gatePath) == true } }
+    }
+
     public static func isClaudeApprovalInstalled(_ settings: Data?) -> Bool {
         guard let settings, let root = EventParser.jsonObject(settings),
               let hooks = root["hooks"] as? [String: Any] else { return false }
@@ -56,7 +76,8 @@ public enum HookInstaller {
         var hooks = try existingHooks(root)
         for event in claudeEvents {
             var groups = (hooks[event] as? [[String: Any]] ?? []).filter { !isOurs($0) }
-            var group: [String: Any] = ["hooks": [["type": "command", "command": claudeCommand(port: port)]]]
+            let command = event == "PreToolUse" ? claudeGateCommand(port: port) : claudeCommand(port: port)
+            var group: [String: Any] = ["hooks": [["type": "command", "command": command]]]
             if claudeToolEvents.contains(event) { group["matcher"] = "*" }
             groups.append(group)
             hooks[event] = groups

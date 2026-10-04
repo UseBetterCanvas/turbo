@@ -125,7 +125,7 @@ private struct WelcomeConnect: View {
                     HStack(spacing: DS.Space.m) {
                         Button {
                             NSPasteboard.general.clearContents()
-                            NSPasteboard.general.setString(model.cloudSetupScript, forType: .string)
+                            model.copyCloudSetupScript()
                             copied = true
                         } label: {
                             Label(copied ? "Copied" : "Copy Setup Script", systemImage: copied ? "checkmark" : "doc.on.doc")

@@ -27,6 +27,8 @@ public struct AgentSession: Identifiable, Equatable, Sendable {
     public var beats: Int = 0
     public var lastTool: String?
     public var transcriptPath: String?
+    /// The log file a local agent writes (Codex), used to find its process.
+    public var logPath: String?
     public var hostAppBundleID: String?
     public var title: String?
     public var link: URL?
@@ -34,6 +36,8 @@ public struct AgentSession: Identifiable, Equatable, Sendable {
     public var failed = false
     /// What was asked to start this turn (local sessions only).
     public var lastPrompt: String?
+    /// The agent's own words for what it's doing right now, when it gives them.
+    public var activityDetail: String?
     /// When it started waiting on you. Nil unless it's waiting.
     public var needsInputSince: Date?
     /// A short name from the first thing this session was asked. Kept across turns.
@@ -116,6 +120,7 @@ public final class SessionStore {
 
         if let cwd = event.cwd, !cwd.isEmpty { s.cwd = cwd }
         if let path = event.transcriptPath { s.transcriptPath = path }
+        if let path = event.logPath { s.logPath = path }
         if let host = event.hostAppBundleID, !host.isEmpty { s.hostAppBundleID = host }
         if let title = event.title, !title.isEmpty { s.title = title }
         if let link = event.link { s.link = link }
@@ -192,6 +197,8 @@ public final class SessionStore {
         }
 
         if case .needsInput = s.phase {} else { s.needsInputSince = nil }
+        // After any turn start above, which clears it.
+        if case .activity = event.kind, let detail = event.activityDetail { s.activityDetail = detail }
         sessions[key] = s
         return changes
     }
@@ -240,6 +247,7 @@ public final class SessionStore {
         s.failed = false
         s.recentSteps = []
         s.lastPrompt = nil
+        s.activityDetail = nil
     }
 
     private func resolveKey(for event: AgentEvent) -> String {

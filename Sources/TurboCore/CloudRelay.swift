@@ -29,33 +29,76 @@ public enum CloudRelay {
         server.appendingPathComponent(channel)
     }
 
+    /// Where Turbo posts stop requests for cloud sessions. Same secret as the channel.
+    public static func stopChannel(_ channel: String) -> String { channel + "-stop" }
+
+    /// What Turbo posts to ask a cloud session to stop.
+    public static func stopMessage(sessionID: String) -> String { "stop " + sessionID }
+
     /// The hook script that runs inside cloud sessions. Strips the hook payload down to the
     /// safe fields and posts it in the background so tool calls are never slowed down.
-    public static func relayScript(channel: String, server: URL = defaultServer) -> String {
-        """
+    /// Before a tool call it also checks, at most every 5 seconds, whether you pressed Stop.
+    /// `shareTitles` also sends the first few words of each prompt, so cloud sessions get a
+    /// name instead of just the repo. Off unless you turn it on.
+    public static func relayScript(channel: String, server: URL = defaultServer, shareTitles: Bool = false) -> String {
+        let titleLines = shareTitles
+            ? "if d.get(\"hook_event_name\") == \"UserPromptSubmit\":\n    out[\"prompt\"] = \" \".join(str(d.get(\"prompt\", \"\")).split()[:6])\n"
+            : ""
+        let stopURL = server.appendingPathComponent(stopChannel(channel)).appendingPathComponent("json").absoluteString + "?poll=1&since=10m"
+        return """
         #!/bin/bash
         # \(marker): tells the Turbo app on your Mac what this cloud session is doing.
-        # Sends only the event name, repo folder name and session link. Never prompts, code or output.
+        # Sends the event name, repo folder name, session link and Claude's one-line description
+        # of the current step.\(shareTitles ? " Also the first 6 words of each prompt, as a title." : "") Never code or output.
         input=$(cat)
-        payload=$(printf '%s' "$input" | python3 -c '
-        import json, os, sys
+        result=$(printf '%s' "$input" | python3 -c '
+        import json, os, sys, time
         d = json.load(sys.stdin)
         out = {k: d[k] for k in ("hook_event_name", "session_id", "tool_name", "notification_type") if k in d}
         if d.get("hook_event_name") == "Notification":
             out["message"] = str(d.get("message", ""))[:200]
-        cwd = str(d.get("cwd") or "").rstrip("/")
+        ti = d.get("tool_input") if isinstance(d.get("tool_input"), dict) else {}
+        todo = next((t for t in ti.get("todos") or [] if isinstance(t, dict) and t.get("status") == "in_progress"), None)
+        act = (todo or {}).get("activeForm") or ti.get("description")
+        if act:
+            out["activity"] = (str(act).splitlines() or [""])[0][:80]
+        \(titleLines)cwd = str(d.get("cwd") or "").rstrip("/")
         out["cwd"] = os.path.basename(cwd) or cwd
         out["remote_session_id"] = os.environ.get("CLAUDE_CODE_REMOTE_SESSION_ID", "")
         print(json.dumps(out))
+        stop = False
+        if d.get("hook_event_name") == "PreToolUse":
+            try:
+                state = os.path.expanduser("~/.claude/turbo-stop-state")
+                seen = open(state).read().split() if os.path.exists(state) else []
+                last = float(seen[0]) if seen else 0.0
+                if time.time() - last >= 5:
+                    import urllib.request
+                    body = urllib.request.urlopen("\(stopURL)", timeout=2).read().decode()
+                    ids = seen[1:]
+                    for line in body.splitlines():
+                        m = json.loads(line)
+                        if m.get("event") == "message" and m.get("message") == "stop " + str(d.get("session_id", "")) and m.get("id") not in ids:
+                            ids.append(m["id"])
+                            stop = True
+                    open(state, "w").write(" ".join([str(time.time())] + ids[-50:]))
+            except Exception:
+                pass
+        if stop:
+            print("STOP")
         ' 2>/dev/null) || exit 0
+        payload=$(printf '%s\n' "$result" | head -n 1)
         nohup curl -s -m 5 -d "$payload" "\(publishURL(channel: channel, server: server).absoluteString)" >/dev/null 2>&1 &
+        if [ "$(printf '%s\n' "$result" | sed -n 2p)" = "STOP" ]; then
+          echo '{"continue":false,"stopReason":"Stopped from Turbo"}'
+        fi
         exit 0
         """
     }
 
     /// Paste into a cloud environment's Setup script. Installs the relay hook for every session
     /// in that environment, and is safe to run repeatedly.
-    public static func setupScript(channel: String, server: URL = defaultServer) -> String {
+    public static func setupScript(channel: String, server: URL = defaultServer, shareTitles: Bool = false) -> String {
         let toolEvents: Set<String> = ["PreToolUse", "PostToolUse"]
         let eventList = events.map { "\"\($0)\"" }.joined(separator: ", ")
         let toolList = toolEvents.sorted().map { "\"\($0)\"" }.joined(separator: ", ")
@@ -63,7 +106,7 @@ public enum CloudRelay {
         # --- Turbo: ping your Mac's Dynamic Island when cloud sessions finish ---
         mkdir -p ~/.claude
         cat > ~/.claude/\(marker).sh <<'TURBO_RELAY'
-        \(relayScript(channel: channel, server: server))
+        \(relayScript(channel: channel, server: server, shareTitles: shareTitles))
         TURBO_RELAY
         chmod +x ~/.claude/\(marker).sh
         python3 - <<'TURBO_SETTINGS'

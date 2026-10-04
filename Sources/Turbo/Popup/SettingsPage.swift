@@ -178,15 +178,27 @@ private struct ConnectionRow<Control: View, Details: View>: View {
 /// Three steps to get cloud sessions checking in.
 private struct CloudSetupSteps: View {
     @EnvironmentObject private var model: AppModel
+    @EnvironmentObject private var prefs: Preferences
     @State private var copied = false
     @State private var test: TestState = .idle
     @State private var confirmReset = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: DS.Space.s) {
+            if model.cloudScriptOutdated {
+                HStack(spacing: DS.Space.s) {
+                    Image(systemName: "arrow.triangle.2.circlepath").foregroundStyle(DS.Palette.gold)
+                    Text("There's a newer setup script, with Stop and live step details. Copy it and paste it over the old one.")
+                        .font(DS.Typography.caption)
+                        .foregroundStyle(DS.Palette.textPrimary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .padding(DS.Space.s)
+                .background(RoundedRectangle(cornerRadius: DS.Radius.m, style: .continuous).fill(DS.Palette.gold.opacity(0.12)))
+            }
             step(1, "Copy your setup script.") {
                 Button {
-                    copy(model.cloudSetupScript)
+                    model.copyCloudSetupScript()
                     copied = true
                     DispatchQueue.main.asyncAfter(deadline: .now() + 2) { copied = false }
                 } label: {
@@ -212,7 +224,7 @@ private struct CloudSetupSteps: View {
                 testResult(test, passed: "Your Mac is receiving.", failed: "Couldn't reach the relay. Check your connection.")
             }
             HStack(spacing: DS.Space.s) {
-                Text("Pings carry only the event, repo name and session link, through a private ntfy.sh channel. If your environment limits network access, allow ntfy.sh.")
+                Text("Turbo only gets the event, repo name, session link and Claude's one-line step description. Never your code. If your environment limits network access, allow ntfy.sh.")
                     .font(DSFont.sans(11, .medium))
                     .foregroundStyle(DS.Palette.textTertiary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -223,6 +235,16 @@ private struct CloudSetupSteps: View {
                     .foregroundStyle(DS.Palette.textSecondary)
             }
             .padding(.top, DS.Space.xs)
+            Toggle(isOn: $prefs.cloudShareTitles) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Name Cloud Sessions").font(DS.Typography.body)
+                    Text("Also send the first 6 words of each prompt, so sessions show a name instead of the repo. Copy the script again after changing this.")
+                        .font(DS.Typography.caption)
+                        .foregroundStyle(DS.Palette.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .toggleStyle(BCSwitchStyle())
         }
         .confirmationDialog("Make a new channel?", isPresented: $confirmReset) {
             Button("New Channel", role: .destructive) { model.resetCloudChannel() }
@@ -249,7 +271,7 @@ private struct ClaudeLocalDetails: View {
     @EnvironmentObject private var model: AppModel
     let onDisconnect: () -> Void
     @State private var test: TestState = .idle
-    @State private var approvals = Integrations.isClaudeApprovalInstalled
+    @State private var approvals = Integrations.isClaudeApprovalInstalled && Integrations.isClaudeStopInstalled
     @State private var error: String?
 
     var body: some View {
@@ -258,8 +280,8 @@ private struct ClaudeLocalDetails: View {
                 Image(systemName: approvals ? "checkmark.circle.fill" : "hand.raised")
                     .foregroundStyle(approvals ? DS.Palette.ok : DS.Palette.textSecondary)
                 Text(approvals
-                     ? "Approve from Turbo is on. Permission prompts show Allow / Deny in the island when you're not in the terminal."
-                     : "Approve permission prompts from the island instead of the terminal.")
+                     ? "Approvals and Stop are on. Allow, Deny or Stop sessions right from the island."
+                     : "Allow, Deny or Stop sessions from the island instead of the terminal.")
                     .font(DS.Typography.caption)
                     .foregroundStyle(DS.Palette.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -268,7 +290,8 @@ private struct ClaudeLocalDetails: View {
                     Button("Turn On") {
                         do {
                             try Integrations.installClaude()
-                            approvals = Integrations.isClaudeApprovalInstalled
+                            approvals = Integrations.isClaudeApprovalInstalled && Integrations.isClaudeStopInstalled
+                            model.refreshIntegrations()
                             error = nil
                         } catch {
                             self.error = "Couldn't update Claude Code's settings: \(error.localizedDescription)"
@@ -517,14 +540,16 @@ private struct GeneralSection: View {
                     .frame(width: 180)
             }
             RowDivider()
-            ToggleRow(title: "Open at login", isOn: Binding(
+            ToggleRow(title: "Open at Login", isOn: Binding(
                 get: { model.launchAtLogin },
                 set: { model.setLaunchAtLogin($0) }
             ))
             RowDivider()
             UpdateRow(updater: model.updater)
             RowDivider()
-            SettingRow(title: "Welcome tour") {
+            ToggleRow(title: "Install Updates Automatically", isOn: $prefs.autoUpdate)
+            RowDivider()
+            SettingRow(title: "Welcome Tour") {
                 Button("Show") { model.showOnboarding() }.buttonStyle(SecondaryButtonStyle())
             }
         }
@@ -577,7 +602,7 @@ struct UpdateRow: View {
 
     private var detail: String {
         switch updater.state {
-        case .idle: return "Turbo checks for new versions on its own."
+        case .idle: return "Turbo checks every hour and installs new versions when nothing's cooking."
         case .checking: return "Checking…"
         case .upToDate: return "You're on the latest version."
         case .available: return "A new version is ready. Turbo will reopen after updating."

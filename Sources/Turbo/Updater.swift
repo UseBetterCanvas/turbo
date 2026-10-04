@@ -35,6 +35,9 @@ final class Updater: ObservableObject {
     /// The last failed install attempt, shown on the board with a retry.
     @Published private(set) var installError: String?
 
+    /// Asked before installing on its own: true when it's a good moment (nothing cooking).
+    var autoInstall: (() -> Bool)?
+
     private var loop: Task<Void, Never>?
     private var token: String?
     private var checking = false
@@ -46,11 +49,22 @@ final class Updater: ObservableObject {
 
     func start() {
         loop?.cancel()
+        // Running from macOS's temporary copy: say so up front, since updates can't land.
+        if Self.isTranslocated { state = .translocated }
         loop = Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: 8_000_000_000)
+            var lastCheck = Date.distantPast
             while !Task.isCancelled {
-                await self?.check()
-                try? await Task.sleep(nanoseconds: 6 * 3600 * 1_000_000_000)
+                guard let self else { return }
+                if Date().timeIntervalSince(lastCheck) >= 3600 {
+                    lastCheck = Date()
+                    await self.check()
+                }
+                // Found one? Install it the next quiet moment.
+                if self.updateAvailable, self.installError == nil, self.autoInstall?() == true {
+                    await self.install()
+                }
+                try? await Task.sleep(nanoseconds: 120 * 1_000_000_000)
             }
         }
     }

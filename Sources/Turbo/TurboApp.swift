@@ -58,7 +58,7 @@ final class StatusItemController: NSObject {
         let count = waiting > 0 ? waiting : cooking
         button.title = count > 0 ? " \(count)" : ""
         button.toolTip = (waiting > 0 ? "\(waiting) need you" : cooking > 0 ? "\(cooking) cooking" : "Turbo")
-            + (model.isQuiet ? " · Quiet" : "") + " · ⌃⌥Space"
+            + (model.isQuiet ? " · Quiet" : "") + (model.hotKeyAvailable ? " · ⌃⌥Space" : "")
     }
 
     @objc private func clicked() {

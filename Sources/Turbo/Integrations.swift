@@ -27,6 +27,11 @@ enum Integrations {
             || NSWorkspace.shared.urlForApplication(withBundleIdentifier: CoworkSessionSource.desktopBundleID) != nil
     }
 
+    /// The PreToolUse gate that lets you Stop a session from Turbo.
+    static var isClaudeStopInstalled: Bool {
+        HookInstaller.isClaudeStopInstalled(try? Data(contentsOf: claudeSettingsURL))
+    }
+
     /// The PermissionRequest hook that lets you Allow / Deny from Turbo.
     static var isClaudeApprovalInstalled: Bool {
         HookInstaller.isClaudeApprovalInstalled(try? Data(contentsOf: claudeSettingsURL))

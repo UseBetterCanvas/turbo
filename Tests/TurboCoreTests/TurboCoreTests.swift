@@ -539,3 +539,138 @@ final class TriageTests: XCTestCase {
         XCTAssertNotNil(try HookInstaller.addingAllowRule("Bash(ls)", to: nil))
     }
 }
+
+final class ActivityDetailTests: XCTestCase {
+    func testBashDescriptionBecomesActivity() throws {
+        let json = #"{"hook_event_name":"PreToolUse","session_id":"s","tool_name":"Bash","tool_input":{"command":"gh api ...","description":"Wait for Greptile review on PR #8"}}"#
+        let event = try XCTUnwrap(EventParser.parseClaudeHook(Data(json.utf8)))
+        XCTAssertEqual(event.activityDetail, "Wait for Greptile review on PR #8")
+        let store = SessionStore()
+        _ = store.apply(event)
+        XCTAssertEqual(store.sorted.first?.activityDetail, "Wait for Greptile review on PR #8")
+    }
+
+    func testTodoActiveForm() throws {
+        let json = #"{"hook_event_name":"PostToolUse","session_id":"s","tool_name":"TodoWrite","tool_input":{"todos":[{"content":"Add tests","activeForm":"Adding tests","status":"completed"},{"content":"Fix CI","activeForm":"Fixing CI","status":"in_progress"}]}}"#
+        XCTAssertEqual(EventParser.parseClaudeHook(Data(json.utf8))?.activityDetail, "Fixing CI")
+    }
+
+    func testRelayActivityAndTitle() throws {
+        let inner = #"{"hook_event_name":"UserPromptSubmit","session_id":"s","cwd":"Clippy","prompt":"Build the note style picker","activity":"Reading files"}"#
+        let envelope = try JSONSerialization.data(withJSONObject: ["event": "message", "id": "1", "message": inner])
+        let event = try XCTUnwrap(EventParser.parseRelayLine(envelope)?.event)
+        XCTAssertEqual(event.prompt, "Build the note style picker")
+        XCTAssertEqual(event.activityDetail, "Reading files")
+    }
+
+    func testSetupScriptTitlesAreOptIn() {
+        XCTAssertFalse(CloudRelay.setupScript(channel: "turbo-x").contains("UserPromptSubmit\":"))
+        XCTAssertFalse(CloudRelay.relayScript(channel: "turbo-x").contains("out[\"prompt\"]"))
+        XCTAssertTrue(CloudRelay.relayScript(channel: "turbo-x", shareTitles: true).contains("out[\"prompt\"]"))
+        let quotes = { (s: String) in s.filter { $0 == "'" }.count }
+        XCTAssertEqual(quotes(CloudRelay.relayScript(channel: "turbo-x", shareTitles: true)), quotes(CloudRelay.relayScript(channel: "turbo-x")), "the python runs inside single quotes")
+    }
+
+    /// Runs the relay's python on a sample hook payload, so a quoting slip can't ship.
+    func testRelayPythonRuns() throws {
+        let python = URL(fileURLWithPath: "/usr/bin/python3")
+        guard FileManager.default.isExecutableFile(atPath: python.path) else { throw XCTSkip("no python3") }
+        for share in [false, true] {
+            let script = CloudRelay.relayScript(channel: "turbo-x", shareTitles: share)
+            let start = try XCTUnwrap(script.range(of: "python3 -c '")).upperBound
+            let end = try XCTUnwrap(script.range(of: "' 2>/dev/null) || exit 0")).lowerBound
+            let code = String(script[start..<end])
+            let process = Process()
+            process.executableURL = python
+            process.arguments = ["-c", code]
+            let input = Pipe(), output = Pipe()
+            process.standardInput = input
+            process.standardOutput = output
+            try process.run()
+            input.fileHandleForWriting.write(Data(#"{"hook_event_name":"UserPromptSubmit","session_id":"s","cwd":"/w/Clippy","prompt":"please fix the flaky syrup tests now ok","tool_input":{"description":"Run tests"}}"#.utf8))
+            try input.fileHandleForWriting.close()
+            process.waitUntilExit()
+            let firstLine = String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self).split(separator: "\n").first ?? ""
+            let out = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(firstLine.utf8)) as? [String: Any])
+            XCTAssertEqual(out["cwd"] as? String, "Clippy")
+            XCTAssertEqual(out["activity"] as? String, "Run tests")
+            XCTAssertEqual(out["prompt"] as? String, share ? "please fix the flaky syrup tests" : nil)
+        }
+    }
+}
+
+
+final class StopTests: XCTestCase {
+    func testStopRequestIsConsumedOnce() {
+        let stops = StopRequests()
+        stops.request("s1")
+        XCTAssertTrue(stops.consume("s1"))
+        XCTAssertFalse(stops.consume("s1"))
+        XCTAssertEqual(StopRequests.gateResponse(stop: false), "")
+        XCTAssertTrue(StopRequests.gateResponse(stop: true).contains(#""continue":false"#))
+    }
+
+    func testInstallUsesGateForPreToolUse() throws {
+        let data = try HookInstaller.installClaude(into: nil)
+        XCTAssertTrue(HookInstaller.isClaudeInstalled(data))
+        XCTAssertTrue(HookInstaller.isClaudeStopInstalled(data))
+        let root = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let hooks = try XCTUnwrap(root["hooks"] as? [String: Any])
+        let post = try XCTUnwrap((hooks["PostToolUse"] as? [[String: Any]])?.first?["hooks"] as? [[String: Any]])
+        XCTAssertTrue((post.first?["command"] as? String)?.contains(">/dev/null 2>&1") == true, "only the gate keeps its output")
+        let pre = try XCTUnwrap((hooks["PreToolUse"] as? [[String: Any]])?.first?["hooks"] as? [[String: Any]])
+        XCTAssertFalse((pre.first?["command"] as? String)?.contains(">/dev/null 2>&1") == true)
+    }
+
+    func testGateRequestsRouteAsClaudeEvents() {
+        let body = Data(#"{"hook_event_name":"PreToolUse","session_id":"s","tool_name":"Bash"}"#.utf8)
+        let request = HTTPRequest(method: "POST", path: HookInstaller.gatePath, query: [:], headers: [:], body: body)
+        XCTAssertEqual(EventRouter.event(for: request)?.agent, .claude)
+    }
+
+    /// Runs the whole relay script through bash, with curl stubbed out, so the shell quoting is proven too.
+    func testRelayScriptRunsInBash() throws {
+        let bash = URL(fileURLWithPath: "/bin/bash")
+        guard FileManager.default.isExecutableFile(atPath: "/usr/bin/python3") else { throw XCTSkip("no python3") }
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("turbo-relay-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let fakeCurl = dir.appendingPathComponent("curl")
+        try "#!/bin/sh\nexit 0\n".write(to: fakeCurl, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: fakeCurl.path)
+        // A stand-in stop server: python's file server answers /turbo-x-stop/json with one stop message.
+        let served = dir.appendingPathComponent("www/turbo-x-stop")
+        try FileManager.default.createDirectory(at: served, withIntermediateDirectories: true)
+        try #"{"id":"m1","event":"message","message":"stop s"}"#.write(to: served.appendingPathComponent("json"), atomically: true, encoding: .utf8)
+        let port = Int.random(in: 20000...40000)
+        let server = Process()
+        server.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
+        server.arguments = ["-m", "http.server", "\(port)", "--bind", "127.0.0.1", "--directory", dir.appendingPathComponent("www").path]
+        server.standardOutput = FileHandle.nullDevice
+        server.standardError = FileHandle.nullDevice
+        try server.run()
+        defer { server.terminate() }
+        Thread.sleep(forTimeInterval: 0.8)
+        let script = dir.appendingPathComponent("relay.sh")
+        try CloudRelay.relayScript(channel: "turbo-x", server: URL(string: "http://127.0.0.1:\(port)")!, shareTitles: true).write(to: script, atomically: true, encoding: .utf8)
+        let process = Process()
+        process.executableURL = bash
+        process.arguments = [script.path]
+        process.environment = ["PATH": dir.path + ":/usr/bin:/bin", "HOME": dir.path, "NO_PROXY": "*", "no_proxy": "*"]
+        try FileManager.default.createDirectory(at: dir.appendingPathComponent(".claude"), withIntermediateDirectories: true)
+        let input = Pipe(), output = Pipe()
+        process.standardInput = input
+        process.standardOutput = output
+        try process.run()
+        input.fileHandleForWriting.write(Data(#"{"hook_event_name":"PreToolUse","session_id":"s","tool_name":"Bash","tool_input":{"description":"Run tests"}}"#.utf8))
+        try input.fileHandleForWriting.close()
+        process.waitUntilExit()
+        XCTAssertEqual(process.terminationStatus, 0)
+        XCTAssertEqual(String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self),
+                       #"{"continue":false,"stopReason":"Stopped from Turbo"}"# + "\n")
+        // The same stop message is only acted on once.
+        let state = try String(contentsOf: dir.appendingPathComponent(".claude/turbo-stop-state"), encoding: .utf8)
+        XCTAssertTrue(state.contains("m1"))
+    }
+}
+

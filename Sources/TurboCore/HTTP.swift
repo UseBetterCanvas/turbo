@@ -62,7 +62,7 @@ public enum EventRouter {
         guard request.method == "POST" else { return nil }
         var event: AgentEvent?
         switch request.path {
-        case "/hook/claude": event = EventParser.parseClaudeHook(request.body, now: now)
+        case "/hook/claude", HookInstaller.gatePath: event = EventParser.parseClaudeHook(request.body, now: now)
         case "/hook/codex": event = EventParser.parseCodexNotify(request.body, now: now)
         default: return nil
         }
@@ -100,3 +100,39 @@ public enum HostApp {
         bundleID.map(terminals.contains) ?? false
     }
 }
+
+/// Sessions you asked to stop. The next `PreToolUse` hook from one of them gets told to stop.
+/// Read on the server's queue, written on the main actor, hence the lock.
+public final class StopRequests: @unchecked Sendable {
+    private let lock = NSLock()
+    private var ids: Set<String> = []
+
+    public init() {}
+
+    public func request(_ sessionID: String) {
+        lock.lock(); defer { lock.unlock() }
+        ids.insert(sessionID)
+    }
+
+    public func cancel(_ sessionID: String) {
+        lock.lock(); defer { lock.unlock() }
+        ids.remove(sessionID)
+    }
+
+    public func contains(_ sessionID: String) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        return ids.contains(sessionID)
+    }
+
+    /// True once per request: the gate that sees it stops the session.
+    public func consume(_ sessionID: String) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        return ids.remove(sessionID) != nil
+    }
+
+    /// What the gate hook prints: stop, or carry on.
+    public static func gateResponse(stop: Bool) -> String {
+        stop ? #"{"continue":false,"stopReason":"Stopped from Turbo"}"# : ""
+    }
+}
+

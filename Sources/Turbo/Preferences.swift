@@ -96,6 +96,12 @@ final class Preferences: ObservableObject {
     @Published var openSessionsIn: OpenTarget { didSet { defaults.set(openSessionsIn.rawValue, forKey: Key.openSessionsIn) } }
     /// The private relay channel cloud sessions post to. Generated once; resettable.
     @Published var cloudChannel: String { didSet { defaults.set(cloudChannel, forKey: Key.cloudChannel) } }
+    /// Cloud sessions send the first few words of each prompt, so they get real names.
+    @Published var cloudShareTitles: Bool { didSet { defaults.set(cloudShareTitles, forKey: Key.cloudShareTitles) } }
+    /// The setup script you last copied, so Turbo can tell you when there's a newer one.
+    @Published var copiedCloudScript: String { didSet { defaults.set(copiedCloudScript, forKey: Key.copiedCloudScript) } }
+    /// Install new versions on their own when nothing's cooking.
+    @Published var autoUpdate: Bool { didSet { defaults.set(autoUpdate, forKey: Key.autoUpdate) } }
     @Published var visualizerAutoOpen: Bool { didSet { defaults.set(visualizerAutoOpen, forKey: Key.visualizerAutoOpen) } }
     @Published var visualizerFullScreen: Bool { didSet { defaults.set(visualizerFullScreen, forKey: Key.visualizerFullScreen) } }
     @Published var visualizerAutoClose: Bool { didSet { defaults.set(visualizerAutoClose, forKey: Key.visualizerAutoClose) } }
@@ -127,6 +133,9 @@ final class Preferences: ObservableObject {
         static let visualizerAutoClose = "visualizerAutoClose"
         static let visualizerPreset = "visualizerPreset"
         static let onboarded = "hasOnboarded"
+        static let cloudShareTitles = "cloudShareTitles"
+        static let copiedCloudScript = "copiedCloudScript"
+        static let autoUpdate = "autoUpdate"
     }
 
     /// Visualizer used to be a mode that auto-opened by default. Keep that behavior for anyone who
@@ -161,6 +170,8 @@ final class Preferences: ObservableObject {
             Key.visualizerFullScreen: true,
             Key.visualizerAutoClose: true,
             Key.visualizerPreset: VisualizerPreset.magnetosphere.rawValue,
+            Key.cloudShareTitles: false,
+            Key.autoUpdate: true,
         ])
         mode = CookMode(rawValue: defaults.string(forKey: Key.mode) ?? "") ?? .island
         playSound = defaults.bool(forKey: Key.playSound)
@@ -181,6 +192,10 @@ final class Preferences: ObservableObject {
         visualizerFullScreen = defaults.bool(forKey: Key.visualizerFullScreen)
         visualizerAutoClose = defaults.bool(forKey: Key.visualizerAutoClose)
         visualizerPreset = VisualizerPreset(rawValue: defaults.string(forKey: Key.visualizerPreset) ?? "") ?? .magnetosphere
+        cloudShareTitles = defaults.bool(forKey: Key.cloudShareTitles)
+        // Set up cloud before Turbo tracked the script? That one predates Stop and step details.
+        copiedCloudScript = defaults.string(forKey: Key.copiedCloudScript) ?? (defaults.bool(forKey: Key.cloudEnabled) ? "legacy" : "")
+        autoUpdate = defaults.bool(forKey: Key.autoUpdate)
         migrateVisualizerMode()
     }
 }

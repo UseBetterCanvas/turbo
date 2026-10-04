@@ -40,10 +40,8 @@ struct AgentBadge: View {
 
     var body: some View {
         ZStack {
-            Circle().fill(agent.tint.opacity(0.22))
-            Image(systemName: agent.symbol)
-                .font(.system(size: size * 0.48, weight: .bold))
-                .foregroundStyle(agent.tint)
+            Circle().fill(DS.Palette.overlay)
+            AgentGlyph(agent: agent, size: size * 0.56)
         }
         .frame(width: size, height: size)
     }
@@ -74,7 +72,7 @@ extension AgentSession {
         case .cooking:
             // Quiet a while? It may be stuck, or thinking hard. Either way, worth a look.
             let silent = now.timeIntervalSince(lastActivityAt)
-            let doing = silent >= 300 ? "No activity for \(Format.duration(silent))" : activity
+            let doing = silent >= 300 ? "No activity for \(Format.duration(silent))" : (activityDetail ?? activity)
             return "\(doing) · " + Format.clock(now.timeIntervalSince(turnStartedAt ?? now))
         case let .needsInput(message):
             let waited = needsInputSince.map { " · " + Format.clock(now.timeIntervalSince($0)) } ?? ""

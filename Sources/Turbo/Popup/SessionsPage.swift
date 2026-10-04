@@ -106,23 +106,16 @@ struct SessionRowView: View {
 
     var body: some View {
         HStack(spacing: DS.Space.m) {
-            ZStack(alignment: .bottomTrailing) {
-                IconTile(symbol: session.agent.symbol, tint: session.agent.tint, size: 32)
-                Circle()
-                    .fill(dotColor)
-                    .frame(width: 9, height: 9)
-                    .overlay(Circle().strokeBorder(DS.Palette.card, lineWidth: 2))
-                    .offset(x: 2, y: 2)
-            }
+            SessionIcon(session: session, size: 32)
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(session.projectName)
                     .font(DSFont.sans(13.5, .bold))
                     .foregroundStyle(DS.Palette.textPrimary)
                     .lineLimit(1)
-                Text(detail)
+                Text(model.approvalErrors[session.id] ?? detail)
                     .font(DSFont.sans(12, .medium).monospacedDigit())
-                    .foregroundStyle(isWaiting ? DS.Palette.gold : DS.Palette.textSecondary)
+                    .foregroundStyle(model.approvalErrors[session.id] != nil ? DS.Palette.bad : isWaiting ? DS.Palette.gold : DS.Palette.textSecondary)
                     .lineLimit(1)
                     .truncationMode(.tail)
             }
@@ -149,9 +142,12 @@ struct SessionRowView: View {
                 }
                 Button("Allow") { model.decide(session, allow: true) }
                     .buttonStyle(BCButtonStyle(variant: .primary, size: .sm))
-            } else if canOpen {
-                Button("Open") { model.open(session) }
-                    .buttonStyle(BCButtonStyle(variant: isWaiting ? .primary : .secondary, size: .sm))
+            } else {
+                if hovering || isSelected { StopButton(session: session) }
+                if canOpen {
+                    Button("Open") { model.open(session) }
+                        .buttonStyle(BCButtonStyle(variant: isWaiting ? .primary : .secondary, size: .sm))
+                }
             }
         }
         .padding(.horizontal, DS.Space.m)
@@ -166,6 +162,7 @@ struct SessionRowView: View {
         .onTapGesture(count: 2) { model.open(session) }
         .contextMenu {
             if canOpen { Button("Open") { model.open(session) } }
+            if model.stopMethod(for: session) != nil { Button("Stop") { model.stop(session) } }
             Button("Dismiss") { model.dismiss(session) }
         }
         .animation(hovering ? nil : DS.Motion.out, value: hovering)
@@ -199,7 +196,7 @@ struct SessionRowView: View {
             parts.append(message ?? "Needs your OK")
             if let since = session.needsInputSince { parts.append("waiting " + Format.clock(now.timeIntervalSince(since))) }
         case .cooking:
-            parts.append(session.activity)
+            parts.append(session.activityDetail ?? session.activity)
             if let start = session.turnStartedAt { parts.append(Format.clock(now.timeIntervalSince(start))) }
         case .done:
             if session.failed { parts.append("Failed") }

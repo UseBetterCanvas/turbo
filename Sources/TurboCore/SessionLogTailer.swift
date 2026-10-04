@@ -8,6 +8,8 @@ public struct SessionLogContext: Equatable {
     public var hostAppBundleID: String?
     /// The prompt behind the line being parsed, passed along with its event.
     public var prompt: String?
+    /// The log file itself (Turbo uses it to find the process writing it, to stop it).
+    public var logPath: String?
     /// A sidecar file worth re-reading later (Cowork writes the session title after the fact).
     public var sidecar: URL?
 
@@ -112,7 +114,7 @@ public final class SessionLogTailer {
             onEvent(AgentEvent(
                 agent: source.agent, sessionID: c.sessionID, cwd: c.cwd, kind: kind,
                 hostAppBundleID: c.hostAppBundleID, title: c.title, prompt: c.prompt, date: now
-            ))
+            ).with(logPath: c.logPath))
         }
         state.partial = emit ? buffer : Data()
     }
@@ -155,7 +157,9 @@ public struct CodexRolloutSource: SessionLogSource {
     }
 
     public func context(for file: URL) -> SessionLogContext {
-        SessionLogContext(sessionID: Self.sessionID(fromFileName: file.lastPathComponent))
+        var context = SessionLogContext(sessionID: Self.sessionID(fromFileName: file.lastPathComponent))
+        context.logPath = file.path
+        return context
     }
 
     public func parse(line: Data, context: inout SessionLogContext) -> AgentEventKind? {
