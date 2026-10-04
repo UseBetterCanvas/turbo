@@ -161,17 +161,16 @@ private struct CompactIsland: View {
                                 .scaleEffect(glow && !reduceMotion ? 1.18 : 1, anchor: .bottom)
                         }
                     }
-                    HStack(spacing: -3) {
-                        ForEach(agents, id: \.self) { agent in
-                            AgentBadge(agent: agent, size: 15)
-                                .background(Circle().fill(.black).padding(-1))
+                    if waiting {
+                        HStack(spacing: -3) {
+                            ForEach(agents, id: \.self) { agent in
+                                AgentBadge(agent: agent, size: 15)
+                                    .background(Circle().fill(.black).padding(-1))
+                            }
                         }
-                        if allAgents.count > agents.count {
-                            Text("+\(allAgents.count - agents.count)")
-                                .font(DSFont.sans(9, .heavy))
-                                .foregroundStyle(DS.Palette.textSecondary)
-                                .padding(.leading, 5)
-                        }
+                    } else {
+                        // Running: little level bars that jump with every step, like Now Playing.
+                        ActivityBars(boost: glow, paused: reduceMotion)
                     }
                 }
                 .frame(width: IslandLayout.compactSideWidth, alignment: .center)
@@ -217,11 +216,6 @@ private struct CompactIsland: View {
             }
             .frame(height: geometry.docked ? geometry.notchSize.height : IslandLayout.floatingCompactHeight)
 
-            if !waiting && !reduceMotion && model.peekText == nil {
-                CookingShimmer(tint: DS.Palette.textPrimary)
-                    .padding(.horizontal, geometry.docked ? 12 : 18)
-                    .padding(.bottom, 1)
-            }
             }
                 if let peek = model.peekText {
                     // The step it just moved on to, like a Live Activity update.
@@ -303,6 +297,11 @@ private struct SpotlightCard: View {
                 VStack(alignment: .leading, spacing: 3) {
                     HStack(spacing: 6) {
                         AgentGlyph(agent: session.agent, size: 12)
+                        if session.agent.isCloud {
+                            Image(systemName: "cloud.fill")
+                                .font(.system(size: 9, weight: .semibold))
+                                .foregroundStyle(DS.Palette.textTertiary)
+                        }
                         Text(title(for: session))
                             .font(DSFont.sans(14, .bold))
                             .foregroundStyle(.white)
@@ -788,27 +787,3 @@ struct HoverRow<Content: View>: View {
     }
 }
 
-struct SessionRow: View {
-    let session: AgentSession
-    let now: Date
-    var dark = true
-
-    var body: some View {
-        HStack(spacing: 10) {
-            SessionIcon(session: session, size: 28)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(session.projectName)
-                    .font(DSFont.sans(12.5, .bold))
-                    .foregroundStyle(dark ? Color.white : Color.primary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                Text([session.place, session.statusText(now: now)].compactMap { $0 }.joined(separator: " · "))
-                    .font(DSFont.sans(11, .medium).monospacedDigit())
-                    .foregroundStyle(dark ? Color.white.opacity(0.55) : Color.secondary)
-                    .lineLimit(1)
-                    .numericTransition()
-            }
-            Spacer(minLength: 0)
-        }
-    }
-}

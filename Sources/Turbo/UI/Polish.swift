@@ -186,3 +186,31 @@ struct CountdownBar: View {
         }
     }
 }
+
+/// Four little level bars, like the Dynamic Island's Now Playing: always moving while a
+/// session runs, and jumping when a step lands (`boost`).
+struct ActivityBars: View {
+    var boost: Bool
+    var paused = false
+    var tint: Color = DS.Palette.textPrimary
+    private let speeds: [Double] = [5.1, 7.3, 6.2, 8.4]
+    private let phases: [Double] = [0, 1.7, 3.1, 4.6]
+
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 30, paused: paused)) { context in
+            let t = context.date.timeIntervalSinceReferenceDate
+            HStack(alignment: .center, spacing: 2) {
+                ForEach(0..<4, id: \.self) { i in
+                    let wave = 0.5 + 0.5 * sin(t * speeds[i] + phases[i]) * sin(t * speeds[i] * 0.37 + phases[i] * 2)
+                    let level = paused ? 0.5 : min(1, wave * (boost ? 1.0 : 0.65) + (boost ? 0.25 : 0.1))
+                    Capsule()
+                        .fill(tint.opacity(0.9))
+                        .frame(width: 2.5, height: 3 + 10 * level)
+                }
+            }
+            .frame(height: 14)
+        }
+        .animation(DS.Motion.fast, value: boost)
+        .accessibilityLabel("Running")
+    }
+}
