@@ -1,7 +1,7 @@
 import SwiftUI
 import TurboCore
 
-/// Every session at a glance, most urgent first: Needs You, Cooking, Done.
+/// Every session in one list, most urgent first. One row per session, one obvious action.
 struct SessionsPage: View {
     @EnvironmentObject private var model: AppModel
     @EnvironmentObject private var prefs: Preferences
@@ -9,105 +9,95 @@ struct SessionsPage: View {
     var body: some View {
         let board = model.board
 
-        VStack(alignment: .leading, spacing: DS.Space.xl) {
-            HStack(alignment: .top) {
-                PageHeader(title: "Sessions", subtitle: headline(board))
-                Spacer()
-                Button {
-                    model.openVisualizer()
-                } label: {
-                    Label("Visualizer", systemImage: "sparkles")
-                }
-                .buttonStyle(SecondaryButtonStyle())
-                .help("Watch a light show that dances to your sessions' work")
-            }
-
+        VStack(alignment: .leading, spacing: DS.Space.l) {
             if let error = model.serverError {
-                Callout(symbol: "exclamationmark.triangle.fill", text: error, tone: .bad)
+                Callout(symbol: "", text: error, tone: .bad)
             }
             if !Integrations.isClaudeInstalled && !prefs.cloudEnabled {
-                SetupNudge()
+                SetupBanner()
             }
 
             if board.all.isEmpty {
                 EmptyState(
                     symbol: "pawprint",
                     title: "Nothing cooking",
-                    message: "Start a session in Claude Code, Codex or Cowork, on this Mac or in the cloud, and it shows up here."
+                    message: "Start a session in Claude Code, Codex or Cowork and it shows up here."
                 ) {
-                    Button {
+                    Button("Try a Demo") {
+                        model.closePopup()
                         model.simulateBusyDay()
-                    } label: {
-                        Label("Play a Busy Day", systemImage: "play.fill")
                     }
                     .buttonStyle(SecondaryButtonStyle())
                 }
+                .padding(.top, DS.Space.xl)
             } else {
-                BoardSection(title: "Needs You", tone: .attention, sessions: board.needsYou)
-                BoardSection(title: "Cooking", tone: .info, sessions: board.cooking)
-                BoardSection(title: "Done", tone: .good, sessions: board.done) {
-                    Button("Clear Done") { withAnimation(DS.Motion.base) { model.clearFinished() } }
-                        .buttonStyle(GhostButtonStyle())
+                TimelineView(.periodic(from: .now, by: 1)) { context in
+                    VStack(alignment: .leading, spacing: DS.Space.l) {
+                        SessionGroup(title: "Needs you", tone: .attention, sessions: board.needsYou, now: context.date)
+                        SessionGroup(title: "Cooking", tone: .info, sessions: board.cooking, now: context.date)
+                        SessionGroup(title: "Done", tone: .good, sessions: board.done, now: context.date) {
+                            Button("Clear") { withAnimation(DS.Motion.base) { model.clearFinished() } }
+                                .buttonStyle(.plain)
+                                .font(DSFont.sans(12, .semibold))
+                                .foregroundStyle(DS.Palette.textSecondary)
+                        }
+                    }
                 }
             }
         }
     }
-
-    private func headline(_ board: SessionBoard) -> String {
-        if board.all.isEmpty { return "Everything your agents are working on, in one place." }
-        var parts: [String] = []
-        if !board.needsYou.isEmpty { parts.append("\(board.needsYou.count) waiting on you") }
-        if !board.cooking.isEmpty { parts.append("\(board.cooking.count) cooking") }
-        if !board.done.isEmpty { parts.append("\(board.done.count) done") }
-        return parts.joined(separator: " · ")
-    }
 }
 
-private struct BoardSection<Trailing: View>: View {
-    @EnvironmentObject private var model: AppModel
+private struct SessionGroup<Trailing: View>: View {
     let title: String
     let tone: StatusTone
     let sessions: [AgentSession]
+    let now: Date
     @ViewBuilder var trailing: () -> Trailing
 
-    init(title: String, tone: StatusTone, sessions: [AgentSession], @ViewBuilder trailing: @escaping () -> Trailing) {
+    init(title: String, tone: StatusTone, sessions: [AgentSession], now: Date, @ViewBuilder trailing: @escaping () -> Trailing) {
         self.title = title
         self.tone = tone
         self.sessions = sessions
+        self.now = now
         self.trailing = trailing
     }
 
     var body: some View {
         if !sessions.isEmpty {
             VStack(alignment: .leading, spacing: DS.Space.s) {
-                HStack(spacing: DS.Space.s) {
-                    Circle().fill(tone.color).frame(width: 7, height: 7)
-                    Eyebrow(text: "\(title) · \(sessions.count)")
+                HStack(spacing: 6) {
+                    Eyebrow(text: title)
+                    Text("\(sessions.count)")
+                        .font(DSFont.sans(10.5, .heavy).monospacedDigit())
+                        .foregroundStyle(tone.color)
                     Spacer()
                     trailing()
                 }
-                TimelineView(.periodic(from: .now, by: 1)) { context in
-                    VStack(spacing: DS.Space.s) {
-                        ForEach(sessions) { session in
-                            SessionCard(session: session, now: context.date)
-                                .transition(.opacity.combined(with: .move(edge: .top)))
-                        }
+                .padding(.horizontal, DS.Space.xs)
+
+                VStack(spacing: 0) {
+                    ForEach(Array(sessions.enumerated()), id: \.element.id) { index, session in
+                        if index > 0 { RowDivider().padding(.leading, 56) }
+                        SessionRowView(session: session, now: now)
                     }
                 }
+                .background(RoundedRectangle(cornerRadius: DS.Radius.group, style: .continuous).fill(DS.Palette.card))
+                .clipShape(RoundedRectangle(cornerRadius: DS.Radius.group, style: .continuous))
             }
             .animation(DS.Motion.base, value: sessions.map(\.id))
         }
     }
 }
 
-extension BoardSection where Trailing == EmptyView {
-    init(title: String, tone: StatusTone, sessions: [AgentSession]) {
-        self.init(title: title, tone: tone, sessions: sessions) { EmptyView() }
+extension SessionGroup where Trailing == EmptyView {
+    init(title: String, tone: StatusTone, sessions: [AgentSession], now: Date) {
+        self.init(title: title, tone: tone, sessions: sessions, now: now) { EmptyView() }
     }
 }
 
-/// One session: who, where, how long, and one obvious way to get to it.
-struct SessionCard: View {
+/// One session: status dot on the agent icon, project and one line of detail, and Open.
+struct SessionRowView: View {
     @EnvironmentObject private var model: AppModel
     let session: AgentSession
     let now: Date
@@ -116,63 +106,51 @@ struct SessionCard: View {
     var body: some View {
         HStack(spacing: DS.Space.m) {
             ZStack(alignment: .bottomTrailing) {
-                IconTile(symbol: session.agent.symbol, tint: session.agent.tint, size: 36)
-                statusDot.offset(x: 3, y: 3)
+                IconTile(symbol: session.agent.symbol, tint: session.agent.tint, size: 32)
+                Circle()
+                    .fill(dotColor)
+                    .frame(width: 9, height: 9)
+                    .overlay(Circle().strokeBorder(DS.Palette.card, lineWidth: 2))
+                    .offset(x: 2, y: 2)
             }
 
-            VStack(alignment: .leading, spacing: 3) {
-                HStack(spacing: DS.Space.s) {
-                    Text(session.projectName)
-                        .font(DS.Typography.headline)
-                        .foregroundStyle(DS.Palette.textPrimary)
-                        .lineLimit(1)
-                    Text(session.agent.displayName)
-                        .font(DS.Typography.caption)
-                        .foregroundStyle(DS.Palette.textTertiary)
-                        .lineLimit(1)
-                }
-                Text(detail)
-                    .font(DS.Typography.caption.monospacedDigit())
-                    .foregroundStyle(detailColor)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(session.projectName)
+                    .font(DSFont.sans(13.5, .bold))
+                    .foregroundStyle(DS.Palette.textPrimary)
                     .lineLimit(1)
-                    .numericTransition()
+                Text(detail)
+                    .font(DSFont.sans(12, .medium).monospacedDigit())
+                    .foregroundStyle(isWaiting ? DS.Palette.gold : DS.Palette.textSecondary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
             }
 
             Spacer(minLength: DS.Space.s)
 
-            HStack(spacing: DS.Space.s) {
-                if hovering, !session.phase.isActive {
-                    Button {
-                        withAnimation(DS.Motion.base) { model.dismiss(session) }
-                    } label: {
-                        Image(systemName: "xmark")
-                    }
-                    .buttonStyle(GhostButtonStyle())
-                    .help("Dismiss")
+            if hovering, !session.phase.isActive {
+                Button {
+                    withAnimation(DS.Motion.base) { model.dismiss(session) }
+                } label: {
+                    Image(systemName: "xmark").font(.system(size: 10, weight: .bold))
                 }
-                if canOpen {
-                    Button(openLabel) { model.open(session) }
-                        .buttonStyle(BCButtonStyle(variant: isWaiting ? .primary : .secondary, size: .sm))
-                } else {
-                    StatusPill(text: badgeText, tone: badgeTone)
-                }
+                .buttonStyle(.plain)
+                .foregroundStyle(DS.Palette.textTertiary)
+                .help("Dismiss")
+            }
+            if canOpen {
+                Button(isWaiting ? "Respond" : "Open") { model.open(session) }
+                    .buttonStyle(BCButtonStyle(variant: isWaiting ? .primary : .secondary, size: .sm))
             }
         }
         .padding(.horizontal, DS.Space.m)
-        .padding(.vertical, DS.Space.m)
-        .background(
-            RoundedRectangle(cornerRadius: DS.Radius.l, style: .continuous)
-                .fill(hovering ? DS.Palette.overlay : DS.Palette.card)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: DS.Radius.l, style: .continuous)
-                .strokeBorder(isWaiting ? DS.Palette.gold.opacity(0.45) : .clear, lineWidth: 1)
-        )
+        .padding(.vertical, 10)
+        .background(hovering ? DS.Palette.overlay : Color.clear)
         .contentShape(Rectangle())
         .onHover { hovering = $0 }
         .onTapGesture(count: 2) { model.open(session) }
         .contextMenu {
-            if canOpen { Button(openLabel) { model.open(session) } }
+            if canOpen { Button("Open") { model.open(session) } }
             Button("Dismiss") { model.dismiss(session) }
         }
         .animation(hovering ? nil : DS.Motion.out, value: hovering)
@@ -187,86 +165,53 @@ struct SessionCard: View {
         session.link != nil || session.hostAppBundleID != nil
     }
 
-    private var openLabel: String {
-        if session.link != nil { return "Open Session" }
-        return isWaiting ? "Respond" : "Open"
+    private var dotColor: Color {
+        switch session.phase {
+        case .needsInput: return DS.Palette.gold
+        case .cooking: return DS.Palette.brandText
+        case .done: return DS.Palette.ok
+        case .idle: return DS.Palette.textTertiary
+        }
     }
 
+    /// "Claude Code · 4:12 · Bash", "Codex · cooked in 3m 12s · Fixed the bug"
     private var detail: String {
+        var parts = [session.agent.displayName]
         switch session.phase {
         case let .needsInput(message):
-            return message ?? "Waiting on a permission prompt"
-        case .done:
-            if let summary = Format.snippet(session.summary, limit: 90) { return summary }
-            return session.statusText(now: now)
+            parts.append(message ?? "Waiting on a permission prompt")
         case .cooking:
-            var text = session.statusText(now: now)
-            if session.beats > 0 { text += " · \(session.beats) step\(session.beats == 1 ? "" : "s")" }
-            if let tool = session.lastTool { text += " · \(tool)" }
-            return text
+            if let start = session.turnStartedAt { parts.append(Format.clock(now.timeIntervalSince(start))) }
+            if let tool = session.lastTool { parts.append(tool) }
+        case .done:
+            if let duration = session.cookDuration { parts.append("cooked in \(Format.duration(duration))") }
+            if let summary = Format.snippet(session.summary, limit: 80) { parts.append(summary) }
         case .idle:
-            return "Idle"
+            break
         }
-    }
-
-    private var detailColor: Color {
-        isWaiting ? DS.Palette.gold : DS.Palette.textSecondary
-    }
-
-    private var badgeText: String {
-        switch session.phase {
-        case .needsInput: return "Needs you"
-        case .cooking: return "Cooking"
-        case .done: return "Done"
-        case .idle: return "Idle"
-        }
-    }
-
-    private var badgeTone: StatusTone {
-        switch session.phase {
-        case .needsInput: return .attention
-        case .cooking: return .info
-        case .done: return .good
-        case .idle: return .neutral
-        }
-    }
-
-    @ViewBuilder
-    private var statusDot: some View {
-        let color: Color = {
-            switch session.phase {
-            case .needsInput: return DS.Palette.gold
-            case .cooking: return DS.Palette.brandText
-            case .done: return DS.Palette.ok
-            case .idle: return DS.Palette.textTertiary
-            }
-        }()
-        Circle()
-            .fill(color)
-            .frame(width: 10, height: 10)
-            .overlay(Circle().strokeBorder(DS.Palette.card, lineWidth: 2))
+        return parts.joined(separator: " · ")
     }
 }
 
-/// Shown until at least one agent is connected.
-private struct SetupNudge: View {
+/// A slim one-line prompt until something is connected.
+private struct SetupBanner: View {
     @EnvironmentObject private var model: AppModel
 
     var body: some View {
-        Card {
-            HStack(spacing: DS.Space.m) {
-                IconTile(symbol: "link", tint: DS.Palette.brandText, size: 36)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Connect Your Agents").font(DS.Typography.headline)
-                    Text("Claude Code needs one click. Claude cloud sessions need one setup script. Codex, Codex cloud and Cowork just work.")
-                        .font(DS.Typography.caption)
-                        .foregroundStyle(DS.Palette.textSecondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                Spacer()
-                Button("Set Up") { model.popupPage = .agents }
-                    .buttonStyle(PrimaryButtonStyle())
-            }
+        HStack(spacing: DS.Space.m) {
+            Image(systemName: "link")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(DS.Palette.brandText)
+            Text("Connect your agents so Turbo can hear them.")
+                .font(DS.Typography.bodyStrong)
+                .foregroundStyle(DS.Palette.textPrimary)
+            Spacer()
+            Button("Set Up") { model.popupPage = .settings }
+                .buttonStyle(PrimaryButtonStyle())
         }
+        .padding(.horizontal, DS.Space.l)
+        .padding(.vertical, DS.Space.s)
+        .background(RoundedRectangle(cornerRadius: DS.Radius.l, style: .continuous).fill(DS.Palette.brand.opacity(0.12)))
+        .overlay(RoundedRectangle(cornerRadius: DS.Radius.l, style: .continuous).strokeBorder(DS.Palette.brand.opacity(0.35), lineWidth: 1))
     }
 }

@@ -2,34 +2,11 @@ import AppKit
 import Combine
 import SwiftUI
 
-enum PopupPage: String, CaseIterable, Identifiable {
-    case welcome, home, agents, island, visualizer, about
+/// The pop-up has two screens: the session board and settings (plus the first-run tour).
+enum PopupPage: String, Identifiable {
+    case welcome, home, settings
 
     var id: String { rawValue }
-
-    var title: String {
-        switch self {
-        case .welcome: return "Welcome"
-        case .home: return "Sessions"
-        case .agents: return "Agents"
-        case .island: return "Island"
-        case .visualizer: return "Visualizer"
-        case .about: return "About"
-        }
-    }
-
-    var symbol: String {
-        switch self {
-        case .welcome: return "hand.wave"
-        case .home: return "square.stack.3d.up"
-        case .agents: return "link"
-        case .island: return "capsule"
-        case .visualizer: return "sparkles"
-        case .about: return "info.circle"
-        }
-    }
-
-    static let navigation: [PopupPage] = [.home, .agents, .island, .visualizer, .about]
 }
 
 /// A borderless panel that can take keyboard focus without activating Turbo, so your
