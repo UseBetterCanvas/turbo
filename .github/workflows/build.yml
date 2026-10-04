@@ -1,0 +1,45 @@
+name: Build
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  core-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test TurboCore
+        run: swift test
+
+  app-macos:
+    runs-on: macos-15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test
+        run: swift test
+      - name: Bundle
+        run: ./scripts/bundle.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Turbo.app
+          path: build/Turbo.zip
+      # Every push to main refreshes a "latest build" prerelease with a stable download URL:
+      # https://github.com/<owner>/<repo>/releases/download/latest-build/Turbo.zip
+      - name: Publish latest build
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete latest-build --cleanup-tag --yes || true
+          gh release create latest-build build/Turbo.zip \
+            --prerelease \
+            --target "$GITHUB_SHA" \
+            --title "Turbo (latest build)" \
+            --notes "Built from ${GITHUB_REF_NAME} @ ${GITHUB_SHA::7}.
+
+          Easiest install (skips the unverified-app prompt): \`curl -fsSL https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/main/scripts/install.sh | bash\`
+
+          Or unzip, drag Turbo.app to Applications, open it once, then System Settings → Privacy & Security → Open Anyway (it isn't notarized yet)."
