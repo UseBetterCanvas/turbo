@@ -200,7 +200,23 @@ private struct UpdateBanner: View {
     @ObservedObject var updater: Updater
 
     var body: some View {
-        if updater.updateAvailable || updater.installError != nil {
+        if case let .manualInstall(message) = updater.state {
+            HStack(spacing: DS.Space.m) {
+                Image(systemName: "lock.fill")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(DS.Palette.gold)
+                Text(message)
+                    .font(DS.Typography.caption)
+                    .foregroundStyle(DS.Palette.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer()
+                Button("Copy Install Command") { copy(Integrations.installCommand) }
+                    .buttonStyle(PrimaryButtonStyle())
+            }
+            .padding(.horizontal, DS.Space.l)
+            .padding(.vertical, DS.Space.s)
+            .background(RoundedRectangle(cornerRadius: DS.Radius.l, style: .continuous).fill(DS.Palette.card))
+        } else if updater.updateAvailable || updater.installError != nil {
             HStack(spacing: DS.Space.m) {
                 Image(systemName: updater.installError == nil ? "arrow.down.circle.fill" : "exclamationmark.triangle.fill")
                     .font(.system(size: 14, weight: .semibold))
