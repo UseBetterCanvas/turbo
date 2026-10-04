@@ -14,7 +14,7 @@ enum Integrations {
         case conflict(existing: String)
     }
 
-    static let installCommand = "curl -fsSL https://raw.githubusercontent.com/UseBetterCanvas/turbo/main/scripts/install.sh | bash"
+    static let installCommand = #"gh api repos/UseBetterCanvas/turbo/contents/scripts/install.sh -H "Accept: application/vnd.github.raw" | bash"#
 
     /// Codex has been used on this Mac.
     static var isCodexPresent: Bool {
