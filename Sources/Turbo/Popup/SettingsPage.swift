@@ -506,8 +506,15 @@ struct UpdateRow: View {
             case .checking, .downloading, .installing:
                 ProgressView().controlSize(.small)
             case .needsAccess:
-                Button("Copy Sign-in Command") { copy("brew install gh && gh auth login") }
-                    .buttonStyle(SecondaryButtonStyle())
+                HStack(spacing: DS.Space.s) {
+                    Button("Copy Sign-in Command") { copy("brew install gh && gh auth login") }
+                        .buttonStyle(SecondaryButtonStyle())
+                    Button("Check Again") { Task { await updater.check() } }
+                        .buttonStyle(SecondaryButtonStyle())
+                }
+            case .manualInstall:
+                Button("Copy Install Command") { copy(Integrations.installCommand) }
+                    .buttonStyle(PrimaryButtonStyle())
             default:
                 Button("Check Now") { Task { await updater.check() } }
                     .buttonStyle(SecondaryButtonStyle())
@@ -524,6 +531,7 @@ struct UpdateRow: View {
         case .downloading: return "Downloading…"
         case .installing: return "Installing. Turbo will reopen in a moment."
         case .needsAccess: return "Turbo's repo is private. Sign in to GitHub in Terminal once, then check again."
+        case let .manualInstall(message): return message
         case let .failed(message): return message
         }
     }

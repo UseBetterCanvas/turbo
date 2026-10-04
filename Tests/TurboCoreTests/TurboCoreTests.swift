@@ -221,7 +221,7 @@ final class CodexCloudTests: XCTestCase {
 
 final class UpdateInfoTests: XCTestCase {
     // Not `release`: on macOS that name collides with NSObject's -release and crashes XCTest.
-    let releaseJSON = #"{"tag_name":"latest-build","published_at":"2026-10-04T06:25:49Z","body":"Built from main @ 4061f61.\n\n**Install**...","assets":[{"id":609300000,"name":"Turbo.zip","size":2240349}]}"#
+    let releaseJSON = #"{"tag_name":"latest-build","published_at":"2026-10-04T06:25:49Z","body":"Built from main @ 4061f61 (build 42).\n\n**Install**...","assets":[{"id":609300000,"name":"Turbo.zip","size":2240349}]}"#
 
     func testParseRelease() throws {
         let info = try XCTUnwrap(UpdateInfo.parse(release: Data(releaseJSON.utf8)))
@@ -233,10 +233,19 @@ final class UpdateInfoTests: XCTestCase {
 
     func testNewerComparison() throws {
         let info = try XCTUnwrap(UpdateInfo.parse(release: Data(releaseJSON.utf8)))
-        XCTAssertFalse(info.isNewer(thanInstalled: "4061f61fa4715b7270d71280f24ffcb7de759fe2"))
-        XCTAssertTrue(info.isNewer(thanInstalled: "2cf2267d91d6f2fb6db717ec5a7785b396d1a0b0"))
-        XCTAssertFalse(info.isNewer(thanInstalled: "dev"))
-        XCTAssertFalse(info.isNewer(thanInstalled: nil))
+        XCTAssertEqual(info.build, 42)
+        // Same build: nothing to do.
+        XCTAssertFalse(info.isNewer(thanInstalledBuild: 42, commit: "4061f61fa4715b7270d71280f24ffcb7de759fe2"))
+        // Older CI build: update.
+        XCTAssertTrue(info.isNewer(thanInstalledBuild: 41, commit: "2cf2267d91d6f2fb6db717ec5a7785b396d1a0b0"))
+        // Newer build than the release (e.g. a local or branch build): never downgrade.
+        XCTAssertFalse(info.isNewer(thanInstalledBuild: 50, commit: "aaaaaaa"))
+        // Local builds carry no build number: no prompts.
+        XCTAssertFalse(info.isNewer(thanInstalledBuild: nil, commit: "dev"))
+        // Releases from before build numbers aren't offered either.
+        var old = info
+        old.build = nil
+        XCTAssertFalse(old.isNewer(thanInstalledBuild: 41, commit: "2cf2267"))
     }
 }
 

@@ -200,16 +200,26 @@ private struct UpdateBanner: View {
     @ObservedObject var updater: Updater
 
     var body: some View {
-        if updater.updateAvailable {
+        if updater.updateAvailable || updater.installError != nil {
             HStack(spacing: DS.Space.m) {
-                Image(systemName: "arrow.down.circle.fill")
+                Image(systemName: updater.installError == nil ? "arrow.down.circle.fill" : "exclamationmark.triangle.fill")
                     .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(DS.Palette.brandText)
-                Text("A new version of Turbo is ready.")
-                    .font(DS.Typography.bodyStrong)
+                    .foregroundStyle(updater.installError == nil ? DS.Palette.brandText : DS.Palette.bad)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(updater.installError == nil ? "A new version of Turbo is ready." : "The update didn't finish.")
+                        .font(DS.Typography.bodyStrong)
+                    if let error = updater.installError {
+                        Text(error).font(DS.Typography.caption).foregroundStyle(DS.Palette.textSecondary).lineLimit(2)
+                    }
+                }
                 Spacer()
-                Button("Update") { Task { await updater.install() } }
-                    .buttonStyle(PrimaryButtonStyle())
+                if updater.installError != nil {
+                    Button("Try Again") { Task { await updater.retryInstall() } }
+                        .buttonStyle(PrimaryButtonStyle())
+                } else {
+                    Button("Update") { Task { await updater.install() } }
+                        .buttonStyle(PrimaryButtonStyle())
+                }
             }
             .padding(.horizontal, DS.Space.l)
             .padding(.vertical, DS.Space.s)

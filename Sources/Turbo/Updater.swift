@@ -15,17 +15,26 @@ final class Updater: ObservableObject {
         case installing
         /// The repo is private and we have no GitHub sign-in to read it with.
         case needsAccess
+        /// Turbo can't replace itself where it's installed (e.g. an admin-owned folder);
+        /// the install command can, since it asks for a password.
+        case manualInstall(String)
         case failed(String)
     }
 
     @Published private(set) var state: State = .idle
     @Published private(set) var lastChecked: Date?
 
-    /// The commit this build came from (stamped into Info.plist by bundle.sh).
+    /// The commit and CI build number this build came from (stamped into Info.plist by
+    /// bundle.sh). Local builds have no build number and never get update prompts.
     let installedCommit = Bundle.main.object(forInfoDictionaryKey: "TurboCommit") as? String
+    let installedBuild = (Bundle.main.object(forInfoDictionaryKey: "TurboBuild") as? String).flatMap(Int.init)
+
+    /// The last failed install attempt, shown on the board with a retry.
+    @Published private(set) var installError: String?
 
     private var loop: Task<Void, Never>?
     private var token: String?
+    private var checking = false
 
     var updateAvailable: Bool {
         if case .available = state { return true }
@@ -43,34 +52,46 @@ final class Updater: ObservableObject {
         }
     }
 
+    private var busyInstalling: Bool {
+        switch state {
+        case .downloading, .installing: return true
+        default: return false
+        }
+    }
+
     func check() async {
-        if case .downloading = state { return }
-        if case .installing = state { return }
+        // One check at a time, and never while an install is under way.
+        guard !checking, !busyInstalling else { return }
+        checking = true
+        defer { checking = false }
         state = .checking
+        let result: State
         do {
             let data = try await fetch(UpdateInfo.releaseAPI, accept: "application/vnd.github+json")
             lastChecked = Date()
-            guard let info = UpdateInfo.parse(release: data) else {
-                state = .failed("Couldn't read the latest release.")
-                return
+            if let info = UpdateInfo.parse(release: data) {
+                result = info.isNewer(thanInstalledBuild: installedBuild, commit: installedCommit) ? .available(info) : .upToDate
+            } else {
+                result = .failed("Couldn't read the latest release.")
             }
-            state = info.isNewer(thanInstalled: installedCommit) ? .available(info) : .upToDate
         } catch UpdateError.noAccess {
-            state = .needsAccess
+            result = .needsAccess
         } catch {
-            state = .failed(error.localizedDescription)
+            result = .failed(error.localizedDescription)
         }
+        if !busyInstalling { state = result }
     }
 
     func install() async {
         guard case let .available(info) = state else { return }
+        installError = nil
         let target = Bundle.main.bundleURL
         guard target.pathExtension == "app" else {
-            state = .failed("Run Turbo from your Applications folder to update it.")
+            fail("Run Turbo from your Applications folder to update it.")
             return
         }
         guard FileManager.default.isWritableFile(atPath: target.deletingLastPathComponent().path) else {
-            state = .failed("Turbo can't write to \(target.deletingLastPathComponent().path). Move it to Applications and try again.")
+            state = .manualInstall("Turbo can't replace itself in \(target.deletingLastPathComponent().path). Paste the install command in Terminal; it asks for your password.")
             return
         }
 
@@ -91,8 +112,20 @@ final class Updater: ObservableObject {
             try relaunch(replacing: target, with: newApp, cleanup: work)
         } catch {
             try? FileManager.default.removeItem(at: work)
-            state = .failed(error.localizedDescription)
+            fail(error.localizedDescription)
         }
+    }
+
+    /// "Try Again" after a failed install: refresh what's available, then install it.
+    func retryInstall() async {
+        installError = nil
+        await check()
+        await install()
+    }
+
+    private func fail(_ message: String) {
+        installError = message
+        state = .failed(message)
     }
 
     // MARK: Networking
@@ -114,10 +147,11 @@ final class Updater: ObservableObject {
     private func fetch(_ url: URL, accept: String) async throws -> Data {
         if let data = try await request(url, accept: accept, token: nil) { return data }
         if token == nil { token = await Self.githubCLIToken() }
-        guard let token, let data = try await request(url, accept: accept, token: token) else {
-            throw UpdateError.noAccess
-        }
-        return data
+        if let token, let data = try await request(url, accept: accept, token: token) { return data }
+        // The cached token may have expired or been replaced by a fresh `gh auth login`.
+        token = await Self.githubCLIToken()
+        if let token, let data = try await request(url, accept: accept, token: token) { return data }
+        throw UpdateError.noAccess
     }
 
     /// Returns nil for "not visible to this caller" (404/401/403), throws for anything else.
@@ -163,16 +197,28 @@ final class Updater: ObservableObject {
         guard process.terminationStatus == 0 else { throw UpdateError.message("\(tool) failed (\(process.terminationStatus)).") }
     }
 
-    /// Hands off to a tiny script that waits for Turbo to quit, swaps the app and reopens it.
+    /// Hands off to a tiny script that waits for Turbo to quit, then swaps the app in safely:
+    /// the new copy is staged beside the old one, and the old app is only removed once the new
+    /// one is fully in place. Any failure puts the old app back and reopens it.
     private func relaunch(replacing target: URL, with newApp: URL, cleanup: URL) throws {
         func q(_ s: String) -> String { "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'" }
         let pid = ProcessInfo.processInfo.processIdentifier
+        let staged = target.path + ".update"
+        let backup = target.path + ".previous"
         let script = """
         #!/bin/sh
         while kill -0 \(pid) 2>/dev/null; do sleep 0.2; done
-        rm -rf \(q(target.path))
-        /usr/bin/ditto \(q(newApp.path)) \(q(target.path))
-        /usr/bin/xattr -dr com.apple.quarantine \(q(target.path)) 2>/dev/null
+        rm -rf \(q(staged)) \(q(backup))
+        if /usr/bin/ditto \(q(newApp.path)) \(q(staged)) \\
+           && [ -x \(q(staged + "/Contents/MacOS/Turbo")) ] \\
+           && mv \(q(target.path)) \(q(backup)) \\
+           && mv \(q(staged)) \(q(target.path)); then
+          rm -rf \(q(backup))
+          /usr/bin/xattr -dr com.apple.quarantine \(q(target.path)) 2>/dev/null
+        else
+          rm -rf \(q(staged))
+          [ -d \(q(backup)) ] && [ ! -d \(q(target.path)) ] && mv \(q(backup)) \(q(target.path))
+        fi
         /usr/bin/open \(q(target.path))
         rm -rf \(q(cleanup.path))
         """

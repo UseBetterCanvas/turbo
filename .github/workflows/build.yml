@@ -82,7 +82,7 @@ jobs:
             OPEN_NOTE="Or download Turbo.zip below, drag Turbo.app to Applications, open it once, then System Settings → Privacy \\& Security → Open Anyway (this build isn't notarized)."
           fi
           cat > notes.md <<'NOTES'
-          Built from __REF__ @ __SHA__.
+          Built from __REF__ @ __SHA__ (build __RUN__).
 
           **Install or update** (needs the GitHub CLI):
 
@@ -94,7 +94,7 @@ jobs:
 
           Already have Turbo? Settings → Updates → Update.
           NOTES
-          sed -i '' -e "s|__REF__|${GITHUB_REF_NAME}|" -e "s|__SHA__|${GITHUB_SHA::7}|" -e "s|__REPO__|${GITHUB_REPOSITORY}|" -e "s|__OPEN_NOTE__|${OPEN_NOTE}|" notes.md
+          sed -i '' -e "s|__REF__|${GITHUB_REF_NAME}|" -e "s|__SHA__|${GITHUB_SHA::7}|" -e "s|__RUN__|${GITHUB_RUN_NUMBER}|" -e "s|__REPO__|${GITHUB_REPOSITORY}|" -e "s|__OPEN_NOTE__|${OPEN_NOTE}|" notes.md
 
           if gh release view latest-build >/dev/null 2>&1; then
             # Stage the new zip under a temporary name first; only after it's fully uploaded
