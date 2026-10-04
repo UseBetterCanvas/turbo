@@ -11,7 +11,8 @@ struct IslandView: View {
         let presentation = model.presentation
         let geometry = state.geometry
         let size = IslandLayout.size(for: presentation, geometry: geometry, rows: model.sessions.count)
-        let lifted = presentation == .compact && model.pointerInside
+        // The tiny island swells a touch under the pointer, a beat before it opens.
+        let lifted = (presentation == .compact || presentation == .idle) && model.pointerInside
 
         VStack(spacing: 0) {
             Color.clear.frame(height: IslandLayout.topInset(geometry))
@@ -55,6 +56,9 @@ struct IslandView: View {
         switch presentation {
         case .hidden:
             Color.clear
+        case .idle:
+            IdleIsland(geometry: geometry)
+                .transition(.blurFade)
         case .compact:
             CompactIsland(sessions: model.active, geometry: geometry)
                 .transition(.blurFade)
@@ -75,7 +79,7 @@ extension IslandPresentation {
     var isExpanded: Bool {
         switch self {
         case .spotlight, .list: return true
-        case .hidden, .compact: return false
+        case .hidden, .idle, .compact: return false
         }
     }
 }
@@ -101,7 +105,7 @@ private struct IslandBackground: View {
                 shape.fill(Color.black)
                 shape.stroke(DS.Palette.gold.opacity(attention ? (breathe ? 0.75 : 0.2) : 0), lineWidth: 1.5)
             } else {
-                let shape = RoundedRectangle(cornerRadius: presentation == .compact ? size.height / 2 : 24, style: .continuous)
+                let shape = RoundedRectangle(cornerRadius: presentation == .compact || presentation == .idle ? size.height / 2 : 24, style: .continuous)
                 shape.fill(Color.black)
                 shape.stroke(Color.white.opacity(0.09), lineWidth: 1)
                 shape.stroke(DS.Palette.gold.opacity(attention ? (breathe ? 0.75 : 0.2) : 0), lineWidth: 1.5)
@@ -348,20 +352,114 @@ private struct SessionList: View {
     let sessions: [AgentSession]
 
     var body: some View {
-        TimelineView(.periodic(from: .now, by: 1)) { context in
-            VStack(spacing: 0) {
-                ForEach(Array(sessions.prefix(IslandLayout.maxRows).enumerated()), id: \.element.id) { index, session in
-                    HoverRow {
-                        SessionRow(session: session, now: context.date)
-                    } action: {
-                        model.focusHost(of: session)
+        VStack(spacing: 0) {
+            TimelineView(.periodic(from: .now, by: 1)) { context in
+                VStack(spacing: 0) {
+                    if sessions.isEmpty {
+                        HStack(spacing: 10) {
+                            Image(systemName: "pawprint.fill")
+                                .font(.system(size: 14))
+                                .foregroundStyle(Color.white.opacity(0.5))
+                                .frame(width: 26)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Nothing cooking").font(DSFont.sans(12.5, .bold)).foregroundStyle(.white)
+                                Text("Start a session and it shows up here.")
+                                    .font(DSFont.sans(11, .medium))
+                                    .foregroundStyle(Color.white.opacity(0.55))
+                            }
+                            Spacer(minLength: 0)
+                        }
+                        .padding(.horizontal, 8)
+                        .frame(height: IslandLayout.rowHeight)
+                        .staggered(0)
                     }
-                    .frame(height: IslandLayout.rowHeight)
-                    .staggered(index)
+                    ForEach(Array(sessions.prefix(IslandLayout.maxRows).enumerated()), id: \.element.id) { index, session in
+                        HoverRow {
+                            SessionRow(session: session, now: context.date)
+                        } action: {
+                            model.open(session)
+                        }
+                        .frame(height: IslandLayout.rowHeight)
+                        .staggered(index)
+                    }
                 }
             }
-            .padding(.horizontal, 10)
+
+            // Everything else is one click away.
+            HStack(spacing: 6) {
+                IslandFooterButton(symbol: "rectangle.expand.vertical", title: sessions.count > IslandLayout.maxRows ? "All \(sessions.count) sessions" : "Open Turbo") {
+                    model.openPopup(.home)
+                }
+                Spacer()
+                IslandFooterButton(symbol: "sparkles", title: "Visualizer") {
+                    model.openVisualizer()
+                }
+            }
+            .frame(height: IslandLayout.listFooterHeight - 6)
+            .padding(.top, 2)
+            .staggered(min(sessions.count, IslandLayout.maxRows) + 1)
         }
+        .padding(.horizontal, 10)
+    }
+}
+
+private struct IslandFooterButton: View {
+    let symbol: String
+    let title: String
+    let action: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 5) {
+                Image(systemName: symbol).font(.system(size: 10, weight: .semibold))
+                Text(title).font(DSFont.sans(11.5, .semibold))
+            }
+            .foregroundStyle(Color.white.opacity(hovering ? 0.95 : 0.6))
+            .padding(.horizontal, 9)
+            .padding(.vertical, 5)
+            .background(Capsule().fill(Color.white.opacity(hovering ? 0.12 : 0)))
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .animation(hovering ? nil : DS.Motion.out, value: hovering)
+    }
+}
+
+// MARK: Idle: the tiny island when nothing's cooking
+
+/// The paw beside the notch: always there, so Turbo always has a home to hover.
+private struct IdleIsland: View {
+    @EnvironmentObject private var model: AppModel
+    let geometry: NotchGeometry
+
+    var body: some View {
+        let done = model.board.done.count
+        HStack(spacing: 0) {
+            Image(systemName: "pawprint.fill")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(Color.white.opacity(0.75))
+                .frame(width: geometry.docked ? IslandLayout.idleSideWidth : 28)
+            if geometry.docked && geometry.hasNotch {
+                Color.clear.frame(width: geometry.notchSize.width)
+            } else if !geometry.docked {
+                Text("Turbo").font(DSFont.sans(11, .bold)).foregroundStyle(Color.white.opacity(0.8))
+            } else {
+                Color.clear.frame(width: geometry.notchSize.width)
+            }
+            Group {
+                if done > 0 {
+                    // Finished sessions you haven't looked at yet.
+                    Circle().fill(DS.Palette.ok).frame(width: 6, height: 6)
+                        .help("\(done) done")
+                } else {
+                    Color.clear
+                }
+            }
+            .frame(width: geometry.docked ? IslandLayout.idleSideWidth : 10)
+        }
+        .frame(height: geometry.docked ? geometry.notchSize.height : IslandLayout.floatingIdleSize.height)
     }
 }
 

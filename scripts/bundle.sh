@@ -37,6 +37,14 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 
-codesign --force --deep --sign - "$APP"
+# With SIGN_IDENTITY (a "Developer ID Application" cert in the keychain), sign for
+# notarization: hardened runtime and a secure timestamp. Without it, sign ad hoc.
+if [[ -n "${SIGN_IDENTITY:-}" ]]; then
+  codesign --force --options runtime --timestamp --sign "$SIGN_IDENTITY" "$APP/Contents/MacOS/Turbo"
+  codesign --force --options runtime --timestamp --sign "$SIGN_IDENTITY" "$APP"
+  codesign --verify --strict --verbose=2 "$APP"
+else
+  codesign --force --deep --sign - "$APP"
+fi
 (cd build && rm -f Turbo.zip && ditto -c -k --keepParent Turbo.app Turbo.zip)
 echo "Built $APP"

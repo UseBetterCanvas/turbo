@@ -15,10 +15,14 @@ struct Spotlight: Equatable {
     var session: AgentSession
 }
 
-/// Turbo is always exactly one of: hidden, a tiny island, a bigger island (spotlight or hover
-/// list), or the pop-up that grows out of the notch.
+/// Turbo is always exactly one of three shapes, all growing out of the notch: a tiny island
+/// (idle or cooking), a medium island (a done/needs-you card, or the hover list), or the
+/// pop-up. `hidden` only means "the pop-up is showing instead".
 enum IslandPresentation: Equatable {
     case hidden
+    /// Tiny island, nothing cooking: the paw beside the notch.
+    case idle
+    /// Tiny island while sessions cook: flame, timer, count.
     case compact
     case spotlight(Spotlight)
     case list
@@ -82,6 +86,7 @@ final class AppModel: ObservableObject {
     /// When Turbo last heard anything from each agent — powers "Connected · heard 2m ago".
     @Published private(set) var lastHeard: [Agent: Date] = [:]
     @Published private(set) var relayState: RelayListener.State = .off
+    @Published private(set) var codexCloudState: CodexCloudPoller.State = .off
     @Published private(set) var lastRelayMessage: Date?
     @Published var popupOpen = false
     @Published var popupPage: PopupPage = .home
@@ -89,6 +94,7 @@ final class AppModel: ObservableObject {
     private let store = SessionStore()
     private let server = EventServer()
     private let relay = RelayListener()
+    private let codexCloud = CodexCloudPoller()
     private let codexTailer = SessionLogTailer(source: CodexRolloutSource())
     private let coworkTailer = SessionLogTailer(source: CoworkSessionSource())
     private var hoverTask: Task<Void, Never>?
@@ -123,9 +129,9 @@ final class AppModel: ObservableObject {
     var presentation: IslandPresentation {
         if popupOpen { return .hidden }
         if let spotlight { return .spotlight(spotlight) }
-        if isHoveringIsland && !sessions.isEmpty { return .list }
+        if isHoveringIsland { return .list }
         if hasActive { return .compact }
-        return .hidden
+        return .idle
     }
 
     // MARK: Lifecycle
@@ -167,6 +173,18 @@ final class AppModel: ObservableObject {
             .removeDuplicates { $0 == $1 }
             .sink { [weak self] enabled, channel in
                 if enabled { self?.relay.start(channel: channel) } else { self?.relay.stop() }
+            }
+            .store(in: &forwarding)
+
+        codexCloud.onEvents = { [weak self] events in events.forEach { self?.handle($0) } }
+        codexCloud.onState = { [weak self] state in
+            self?.codexCloudState = state
+            if case .watching = state { self?.lastHeard[.codexCloud] = Date() }
+        }
+        preferences.$watchCodexCloud
+            .removeDuplicates()
+            .sink { [weak self] enabled in
+                if enabled { self?.codexCloud.start() } else { self?.codexCloud.stop() }
             }
             .store(in: &forwarding)
 
@@ -216,7 +234,7 @@ final class AppModel: ObservableObject {
         case let .started(session):
             pulses.send(Pulse(agent: session.agent, kind: .start))
             dropSpotlights(for: session.id)
-            if preferences.mode == .visualizer && preferences.visualizerAutoOpen {
+            if preferences.visualizerAutoOpen {
                 visualizer.show()
             }
 
@@ -413,6 +431,10 @@ final class AppModel: ObservableObject {
         CloudRelay.setupScript(channel: preferences.cloudChannel)
     }
 
+    func checkCodexCloudNow() {
+        codexCloud.pollNow()
+    }
+
     func sendRelayTestPing() {
         relay.sendTestPing()
     }
@@ -505,6 +527,12 @@ final class AppModel: ObservableObject {
             tools = ["Read", "Edit", "Bash"]
             summary = "Waffle grid is crispy: fixed the layout bug and opened a PR."
             link = URL(string: "https://claude.ai/code")
+        case .codexCloud:
+            cwd = "crepe-service"
+            tools = []
+            summary = "Crepes are folded: added retries to the batter queue."
+            title = "Add retries to the batter queue"
+            link = URL(string: "https://chatgpt.com/codex")
         }
         let host = Bundle.main.bundleIdentifier
         func send(_ kind: AgentEventKind) {
@@ -531,5 +559,6 @@ final class AppModel: ObservableObject {
         simulate(.claude, seconds: 11, needsInput: true)
         simulate(.codex, seconds: 15)
         simulate(.cowork, seconds: 9)
+        simulate(.codexCloud, seconds: 13)
     }
 }

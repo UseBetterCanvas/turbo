@@ -3,7 +3,7 @@
 <img src="Resources/AppIcon.png" width="128" align="right" alt="Turbo: a pup in a graduation cap">
 
 A Mac Dynamic Island for developers running lots of AI sessions at once. Fire off
-work in **Claude Code** (local or cloud), **Codex** or **Cowork**, go do something
+work in **Claude Code** or **Codex** (local or cloud) or **Cowork**, go do something
 else, and Turbo taps you in the notch the moment a session finishes or needs you.
 One click shows every session's status, and one more opens the thread.
 
@@ -28,26 +28,25 @@ and drag Turbo.app to Applications. Turbo isn't notarized by Apple yet, so macOS
 "could not verify" it: click **Done**, then go to System Settings → Privacy & Security,
 scroll down and click **Open Anyway**. The Terminal install skips this.
 
-## Three shapes, nothing else
+## Three shapes, all from the notch
 
-Turbo is always exactly one of:
+Turbo lives in the notch, like the iPhone's Dynamic Island, and is always exactly one of:
 
-1. **A tiny island.** While sessions cook: a flame for the agent, a timer, and a count.
-   The count turns gold when any session needs you.
-2. **A bigger island.** When a session finishes ("waffle-web is done · cooked for 3m 12s")
-   or hits a permission prompt. If several land at once they take turns ("+2 more"),
-   and "needs you" always cuts the line. Hover the notch for the full list.
-3. **The pop-up.** Click the paw in the menu bar (or the island) and a panel grows out of
-   the notch: every session grouped into **Needs You**, **Cooking** and **Done**, each
-   with an **Open** button that takes you straight to the thread. Setup and settings
-   live here too.
+1. **A tiny island.** A paw beside the notch when nothing's cooking. While sessions cook:
+   a flame for the agent, a timer and a count, which turns gold when any session needs you.
+2. **A medium island.** Hover the tiny island and it grows into a list of every session with
+   its status. It also pops out on its own when a session finishes ("waffle-web is done ·
+   cooked for 3m 12s") or hits a permission prompt. If several land at once they take turns
+   ("+2 more"), and "needs you" always cuts the line.
+3. **The pop-up.** Click the island (or the paw in the menu bar) and a panel grows out of the
+   notch: every session grouped into **Needs You**, **Cooking** and **Done**, each with an
+   **Open** button that goes straight to the thread. Setup and settings live here too.
 
-There's also an optional **Visualizer** mode: an iTunes-style light show that plays full
-screen while agents work. Every tool call is a beat and every finished session sets off a
-finale.
+**Visualizer:** a fun, full-screen view of the progress, one click away from the hover list
+or the pop-up. Every tool call is a beat and every finished session sets off a finale.
 
-If another notch app is running (HeyClicky, NotchNook, boring.notch, Alcove…), Turbo floats
-just below the notch instead of fighting it, and moves back in when that app quits.
+If another notch app is running (HeyClicky, NotchNook, Alcove…) and the two overlap,
+Settings → Island → Placement can move Turbo just below the notch.
 
 ## How it hears your sessions
 
@@ -55,7 +54,8 @@ just below the notch instead of fighting it, and moves back in when that app qui
 |---|---|---|
 | **Claude Code (cloud)** on claude.ai/code | A hook in each cloud session posts thin pings to a private [ntfy.sh](https://ntfy.sh) channel. Turbo subscribes to it. | Agents → Claude Code (cloud) → **Copy Setup Script**, then paste it at the end of your cloud environment's Setup script. |
 | **Claude Code** in your terminal or the desktop app | [Hooks](https://code.claude.com/docs/en/hooks) in `~/.claude/settings.json` post to Turbo on `127.0.0.1:47823`. | One click: Agents → **Connect**. |
-| **Codex** | Turbo reads Codex's session logs in `~/.codex/sessions/`. | None. |
+| **Codex** (CLI, IDE extension) | Turbo reads Codex's session logs in `~/.codex/sessions/`. | None. |
+| **Codex (cloud)** on chatgpt.com/codex | Turbo asks the Codex CLI for your recent cloud tasks (`codex cloud list --json`) every 20 seconds, using your existing login. | None if the Codex CLI is installed and signed in (`brew install codex && codex login`). |
 | **Cowork** | Cowork doesn't fire hooks, so Turbo reads each session's `audit.jsonl` in Claude Desktop's data folder. | None. |
 
 **What cloud pings contain:** the event name (prompt sent, tool used, needs permission,
@@ -67,6 +67,22 @@ environment restricts network access, add `ntfy.sh` to its allowed domains.
 
 Local config edits are backed up first (`settings.json.turbo-backup`), tagged
 `turbo-hook`, and fully removable.
+
+## Signing and notarization
+
+Until Turbo is notarized, browser downloads trigger macOS's "Apple could not verify" prompt
+(the Terminal install doesn't). CI signs with a Developer ID and notarizes automatically once
+these repository secrets exist (Settings → Secrets and variables → Actions):
+
+| Secret | What it is |
+|---|---|
+| `MACOS_CERT_P12_BASE64` | Your "Developer ID Application" certificate exported as .p12, base64-encoded (`base64 -i cert.p12 \| pbcopy`) |
+| `MACOS_CERT_PASSWORD` | The password you set when exporting the .p12 |
+| `APPSTORE_API_KEY_P8_BASE64` | An App Store Connect API key (.p8, "Developer" access), base64-encoded |
+| `APPSTORE_KEY_ID` | That key's ID |
+| `APPSTORE_ISSUER_ID` | Your App Store Connect issuer ID |
+
+Both need an Apple Developer Program membership. Without the secrets, builds are ad-hoc signed.
 
 ## Design
 
@@ -102,6 +118,7 @@ Sources/TurboCore/    Pure Foundation, unit-tested on Linux too
   SessionStore.swift        the session state machine (idle → cooking ⇄ needs you → done)
   CloudRelay.swift          cloud setup script, relay hook, channel URLs
   SessionLogTailer.swift    zero-config Codex and Cowork detection
+  CodexCloud.swift          Codex cloud task parsing and change tracking
   HookInstaller.swift       safe, idempotent edits to Claude and Codex configs
   HTTP.swift, ClaudeTranscript.swift
 Sources/Turbo/        The macOS app (SwiftUI + AppKit)

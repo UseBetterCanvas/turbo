@@ -8,6 +8,7 @@ extension Agent {
         case .codex: return Color(red: 0.40, green: 0.74, blue: 1.0)
         case .cowork: return Color(red: 0.70, green: 0.58, blue: 1.0)
         case .cloud: return Color(red: 0.95, green: 0.62, blue: 0.48)
+        case .codexCloud: return Color(red: 0.47, green: 0.77, blue: 1.0)
         }
     }
 
@@ -18,6 +19,7 @@ extension Agent {
         case .codex: return 0.57
         case .cowork: return 0.72
         case .cloud: return 0.04
+        case .codexCloud: return 0.57
         }
     }
 
@@ -27,6 +29,7 @@ extension Agent {
         case .codex: return "chevron.left.forwardslash.chevron.right"
         case .cowork: return "folder.fill"
         case .cloud: return "cloud.fill"
+        case .codexCloud: return "icloud.fill"
         }
     }
 }

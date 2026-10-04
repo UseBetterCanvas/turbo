@@ -36,6 +36,9 @@ enum IslandLayout {
     /// The panel is a fixed transparent canvas; the island draws inside it.
     static let canvasSize = CGSize(width: 680, height: 380)
     static let compactSideWidth: CGFloat = 76
+    static let idleSideWidth: CGFloat = 34
+    static let floatingIdleSize = CGSize(width: 66, height: 30)
+    static let listFooterHeight: CGFloat = 40
     static let floatingCompactWidth: CGFloat = 248
     static let floatingCompactHeight: CGFloat = 38
     static let floatingGap: CGFloat = 6
@@ -55,14 +58,14 @@ enum IslandLayout {
 
     static func topRadius(for presentation: IslandPresentation) -> CGFloat {
         switch presentation {
-        case .hidden, .compact: return 6
+        case .hidden, .idle, .compact: return 6
         case .spotlight, .list: return 14
         }
     }
 
     static func bottomRadius(for presentation: IslandPresentation) -> CGFloat {
         switch presentation {
-        case .hidden, .compact: return 10
+        case .hidden, .idle, .compact: return 10
         case .spotlight, .list: return 26
         }
     }
@@ -74,6 +77,10 @@ enum IslandLayout {
         switch presentation {
         case .hidden:
             return geometry.docked && geometry.hasNotch ? CGSize(width: notch.width + flare, height: notch.height) : CGSize(width: notch.width, height: 0)
+        case .idle:
+            return geometry.docked
+                ? CGSize(width: notch.width + 2 * idleSideWidth + flare, height: notch.height)
+                : floatingIdleSize
         case .compact:
             return geometry.docked
                 ? CGSize(width: notch.width + 2 * compactSideWidth + flare, height: notch.height)
@@ -82,17 +89,17 @@ enum IslandLayout {
             return CGSize(width: cardWidth, height: headroom(geometry) + 104)
         case .list:
             let count = CGFloat(min(max(rows, 1), maxRows))
-            return CGSize(width: cardWidth, height: headroom(geometry) + count * rowHeight + 18)
+            return CGSize(width: cardWidth, height: headroom(geometry) + count * rowHeight + 10 + listFooterHeight)
         }
     }
 
     /// The area that catches the mouse. When idle and docked, hovering the notch itself reveals
     /// recent sessions; when floating, an idle Turbo is invisible and leaves the notch alone.
+    /// The area that catches the mouse: the island itself, in every shape. While the pop-up
+    /// is open it handles its own events.
     static func hitRect(for presentation: IslandPresentation, geometry: NotchGeometry, rows: Int) -> NSRect {
         var size = size(for: presentation, geometry: geometry, rows: rows)
-        if case .hidden = presentation {
-            size = geometry.docked && rows > 0 ? geometry.notchSize : .zero
-        }
+        if case .hidden = presentation { size = .zero }
         let frame = geometry.screenFrame
         return NSRect(
             x: frame.midX - size.width / 2,

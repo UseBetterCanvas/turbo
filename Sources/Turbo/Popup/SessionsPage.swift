@@ -13,12 +13,13 @@ struct SessionsPage: View {
             HStack(alignment: .top) {
                 PageHeader(title: "Sessions", subtitle: headline(board))
                 Spacer()
-                BCSegmented(options: [
-                    SegmentOption(value: CookMode.island, label: "Island", symbol: "capsule"),
-                    SegmentOption(value: CookMode.visualizer, label: "Visualizer", symbol: "sparkles"),
-                ], selection: $prefs.mode)
-                .frame(width: 220)
-                .help("Island: a heads-up in the notch. Visualizer: plus a light show while agents work.")
+                Button {
+                    model.openVisualizer()
+                } label: {
+                    Label("Visualizer", systemImage: "sparkles")
+                }
+                .buttonStyle(SecondaryButtonStyle())
+                .help("Watch a light show that dances to your sessions' work")
             }
 
             if let error = model.serverError {
@@ -257,7 +258,7 @@ private struct SetupNudge: View {
                 IconTile(symbol: "link", tint: DS.Palette.brandText, size: 36)
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Connect Your Agents").font(DS.Typography.headline)
-                    Text("Claude Code needs one click. Cloud sessions need one setup script. Codex and Cowork just work.")
+                    Text("Claude Code needs one click. Claude cloud sessions need one setup script. Codex, Codex cloud and Cowork just work.")
                         .font(DS.Typography.caption)
                         .foregroundStyle(DS.Palette.textSecondary)
                         .fixedSize(horizontal: false, vertical: true)
