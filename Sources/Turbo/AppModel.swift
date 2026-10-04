@@ -39,6 +39,16 @@ struct Pulse {
 
     let agent: Agent
     let kind: Kind
+    /// The tool behind a beat, so the visualizer can react to what's actually happening.
+    var tool: String? = nil
+}
+
+/// A Claude Code permission prompt waiting on Allow or Deny.
+struct PendingApproval {
+    let token = UUID()
+    let tool: String
+    let detail: String?
+    let respond: @Sendable (String) -> Void
 }
 
 /// Sessions grouped by what they need from you, most urgent first.
@@ -89,6 +99,10 @@ final class AppModel: ObservableObject {
     @Published private(set) var relayState: RelayListener.State = .off
     @Published private(set) var codexCloudState: CodexCloudPoller.State = .off
     @Published private(set) var lastRelayMessage: Date?
+    /// Permission prompts you can answer from Turbo, by session id.
+    @Published private(set) var approvals: [String: PendingApproval] = [:]
+    /// The session whose details are showing in the hover list.
+    @Published var detailSessionID: String?
     @Published var popupOpen = false
     @Published var popupPage: PopupPage = .home
 
@@ -148,6 +162,11 @@ final class AppModel: ObservableObject {
             self.handle(event)
         }
         server.onFailure = { [weak self] message in self?.serverError = message }
+        server.onPermission = { [weak self] request, respond in
+            guard let self else { respond(""); return }
+            self.lastHeard[.claude] = Date()
+            self.askForApproval(request, respond: respond)
+        }
         do {
             try server.start(port: UInt16(HookInstaller.defaultPort))
         } catch {
@@ -216,6 +235,7 @@ final class AppModel: ObservableObject {
             try? await Task.sleep(nanoseconds: wantsExpand ? 140_000_000 : 260_000_000)
             guard let self, !Task.isCancelled, self.expandRequested == wantsExpand else { return }
             self.isHoveringIsland = wantsExpand
+            if !wantsExpand { self.detailSessionID = nil }
         }
     }
 
@@ -247,10 +267,10 @@ final class AppModel: ObservableObject {
             }
 
         case let .beat(session):
-            pulses.send(Pulse(agent: session.agent, kind: .beat))
+            pulses.send(Pulse(agent: session.agent, kind: .beat, tool: session.lastTool))
 
         case let .resumed(session):
-            pulses.send(Pulse(agent: session.agent, kind: .beat))
+            pulses.send(Pulse(agent: session.agent, kind: .beat, tool: session.lastTool))
             dropSpotlights(for: session.id, kind: .needsInput)
 
         case let .needsInput(session):
@@ -260,6 +280,7 @@ final class AppModel: ObservableObject {
 
         case let .finished(session):
             pulses.send(Pulse(agent: session.agent, kind: .finish))
+            approvals.removeValue(forKey: session.id)?.respond("")
             dropSpotlights(for: session.id, kind: .needsInput)
             // nil duration means we never saw it start — still worth announcing.
             let worthCelebrating = (session.cookDuration ?? .infinity) >= preferences.minimumCookSeconds
@@ -279,6 +300,7 @@ final class AppModel: ObservableObject {
 
         case let .removed(id):
             dropSpotlights(for: id)
+            approvals.removeValue(forKey: id)?.respond("")
         }
     }
 
@@ -364,6 +386,56 @@ final class AppModel: ObservableObject {
         } else {
             openPopup(.home)
         }
+    }
+
+    // MARK: Approvals
+
+    /// A permission prompt from Claude Code. If you're already looking at the app it runs in,
+    /// step aside so the prompt shows there. Otherwise offer Allow / Deny in the island for a
+    /// minute, then fall back to the normal prompt.
+    private func askForApproval(_ request: HTTPRequest, respond: @escaping @Sendable (String) -> Void) {
+        guard let ask = EventParser.parsePermissionRequest(request.body) else { respond(""); return }
+        let host = HostApp.bundleID(app: request.query["app"], termProgram: request.query["term"])
+        if let host, NSWorkspace.shared.frontmostApplication?.bundleIdentifier == host {
+            respond("")
+            return
+        }
+        let key = "\(Agent.claude.rawValue):\(ask.sessionID)"
+        approvals[key]?.respond("")
+        let pending = PendingApproval(tool: ask.tool, detail: ask.detail, respond: respond)
+        approvals[key] = pending
+        handle(AgentEvent(
+            agent: .claude, sessionID: ask.sessionID, cwd: ask.cwd,
+            kind: .needsInput(message: Self.approvalMessage(tool: ask.tool, detail: ask.detail)),
+            hostAppBundleID: host
+        ))
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 60_000_000_000)
+            guard let self, self.approvals[key]?.token == pending.token else { return }
+            self.approvals[key] = nil
+            pending.respond("")
+        }
+    }
+
+    /// "Wants to run npm test", "Wants to edit Store.swift"
+    static func approvalMessage(tool: String, detail: String?) -> String {
+        let t = tool.lowercased()
+        guard let detail, !detail.isEmpty else { return "Wants to use \(tool)" }
+        if t.contains("bash") || t.contains("shell") { return "Wants to run \(detail)" }
+        if t.contains("edit") || t.contains("write") { return "Wants to edit \(detail)" }
+        if t.contains("fetch") || t.contains("web") { return "Wants to open \(detail)" }
+        return "Wants to use \(tool): \(detail)"
+    }
+
+    func pendingApproval(for session: AgentSession) -> PendingApproval? {
+        approvals[session.id]
+    }
+
+    /// Answers a permission prompt from Turbo.
+    func decide(_ session: AgentSession, allow: Bool) {
+        guard let pending = approvals.removeValue(forKey: session.id) else { return }
+        pending.respond(EventParser.permissionDecision(allow: allow))
+        handle(AgentEvent(agent: session.agent, sessionID: session.sessionID, kind: .activity(tool: allow ? pending.tool : nil)))
     }
 
     // MARK: Sessions

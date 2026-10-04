@@ -106,7 +106,18 @@ final class VisualizerEngine {
     func handle(_ pulse: Pulse) {
         switch pulse.kind {
         case .start: kick(0.9, hue: pulse.agent.hue)
-        case .beat: kick(0.35, hue: pulse.agent.hue)
+        case .beat:
+            // Match the step: commands hit hard, edits shift the color, reading is a light tick.
+            switch pulse.tool.map(stepLabel) {
+            case "Command": kick(0.7, hue: pulse.agent.hue)
+            case "Edit":
+                kick(0.45, hue: pulse.agent.hue + 0.1)
+                hue += 0.04
+            case "Read": kick(0.18, hue: pulse.agent.hue - 0.04)
+            case "Web": kick(0.4, hue: 0.55)
+            case "Helper": kick(0.55, hue: pulse.agent.hue + 0.2)
+            default: kick(0.32, hue: pulse.agent.hue)
+            }
         case .needsInput: kick(0.5, hue: 0.14)
         case .finish: celebrate(hue: pulse.agent.hue)
         }

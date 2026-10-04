@@ -102,6 +102,19 @@ extension AgentSession {
     }
 }
 
+/// A short label for one step, for the step chips: "Ran a command" → "Command".
+func stepLabel(_ tool: String) -> String {
+    let t = tool.lowercased()
+    func has(_ words: [String]) -> Bool { words.contains { t.contains($0) } }
+    if has(["bash", "shell", "exec", "command", "terminal"]) { return "Command" }
+    if has(["edit", "write", "patch", "notebook"]) { return "Edit" }
+    if has(["read", "grep", "glob", "ls"]) { return "Read" }
+    if has(["web", "fetch", "search"]) { return "Web" }
+    if has(["task", "agent"]) { return "Helper" }
+    if has(["todo", "plan"]) { return "Plan" }
+    return tool.count > 12 ? String(tool.prefix(11)) + "…" : tool
+}
+
 /// One line for the top of the hover list: what's going on across every session.
 func headline(for board: SessionBoard, now: Date) -> String {
     var parts: [String] = []

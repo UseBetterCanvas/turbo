@@ -10,7 +10,7 @@ struct IslandView: View {
     var body: some View {
         let presentation = model.presentation
         let geometry = state.geometry
-        let size = IslandLayout.size(for: presentation, geometry: geometry, rows: model.sessions.count)
+        let size = IslandLayout.size(for: presentation, geometry: geometry, rows: model.sessions.count, detail: model.detailSessionID != nil)
         // The tiny island swells a touch under the pointer, a beat before it opens.
         let lifted = (presentation == .compact || presentation == .idle) && model.pointerInside
 
@@ -274,6 +274,21 @@ private struct SpotlightCard: View {
                     }
                 }
                 Spacer(minLength: 0)
+                // Answer the permission prompt right here.
+                if spotlight.kind == .needsInput, model.pendingApproval(for: session) != nil {
+                    VStack(spacing: 6) {
+                        Button("Allow") {
+                            model.decide(session, allow: true)
+                        }
+                        .buttonStyle(BCButtonStyle(variant: .primary, size: .sm, fullWidth: true))
+                        Button("Deny") {
+                            model.decide(session, allow: false)
+                        }
+                        .buttonStyle(BCButtonStyle(variant: .secondary, size: .sm, fullWidth: true))
+                    }
+                    .frame(width: 84)
+                    .padding(.top, 8)
+                }
             }
             .padding(.horizontal, 22)
             .padding(.top, 12)
@@ -390,15 +405,28 @@ private struct SessionList: View {
                         .frame(height: IslandLayout.rowHeight)
                         .staggered(0)
                     }
-                    ForEach(Array(sessions.prefix(IslandLayout.maxRows).enumerated()), id: \.element.id) { index, session in
-                        HoverRow {
-                            SessionRow(session: session, now: context.date)
-                        } action: {
-                            model.open(session)
+                    // Scrolls past five sessions; resting on one opens its details below it.
+                    ScrollView(.vertical, showsIndicators: sessions.count > IslandLayout.maxRows) {
+                        VStack(spacing: 0) {
+                            ForEach(Array(sessions.enumerated()), id: \.element.id) { index, session in
+                                HoverRow {
+                                    SessionRow(session: session, now: context.date)
+                                } action: {
+                                    model.open(session)
+                                }
+                                .frame(height: IslandLayout.rowHeight)
+                                .onHover { inside in hoverRow(session, inside) }
+                                .staggered(index)
+                                if model.detailSessionID == session.id {
+                                    SessionDetail(session: session)
+                                        .frame(height: IslandLayout.detailHeight)
+                                        .transition(.opacity)
+                                }
+                            }
                         }
-                        .frame(height: IslandLayout.rowHeight)
-                        .staggered(index)
                     }
+                    .frame(height: CGFloat(min(max(sessions.count, sessions.isEmpty ? 0 : 1), IslandLayout.maxRows)) * IslandLayout.rowHeight
+                        + (model.detailSessionID != nil ? IslandLayout.detailHeight : 0))
                 }
             }
 
@@ -420,6 +448,104 @@ private struct SessionList: View {
             .staggered(min(sessions.count, IslandLayout.maxRows) + 1)
         }
         .padding(.horizontal, 10)
+    }
+}
+
+private extension SessionList {
+    func hoverRow(_ session: AgentSession, _ inside: Bool) {
+        guard inside else { return }
+        let id = session.id
+        let model = self.model
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak model] in
+            guard let model, model.isHoveringIsland, model.detailSessionID != id else { return }
+            withAnimation(DS.Motion.base) { model.detailSessionID = id }
+        }
+    }
+}
+
+/// What's going on in one thread: what was asked, the latest from the agent, recent steps,
+/// and the actions that matter right now.
+private struct SessionDetail: View {
+    @EnvironmentObject private var model: AppModel
+    let session: AgentSession
+    @State private var latest: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            if let prompt = session.lastPrompt {
+                labeled("Asked", prompt)
+            }
+            if let text = latest ?? Format.snippet(session.summary, limit: 200) {
+                labeled(session.phase.isActive ? "Latest" : "Result", text)
+            }
+            if case let .needsInput(message) = session.phase, let message {
+                labeled("Waiting on", message)
+            }
+            if !session.recentSteps.isEmpty {
+                HStack(spacing: 4) {
+                    ForEach(Array(session.recentSteps.suffix(5).enumerated()), id: \.offset) { _, tool in
+                        Text(stepLabel(tool))
+                            .font(DSFont.sans(10, .bold))
+                            .foregroundStyle(Color.white.opacity(0.75))
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(Capsule().fill(Color.white.opacity(0.1)))
+                    }
+                    if session.beats > 0 {
+                        Text("\(session.beats) steps")
+                            .font(DSFont.sans(10, .medium).monospacedDigit())
+                            .foregroundStyle(Color.white.opacity(0.45))
+                    }
+                }
+            }
+            if session.lastPrompt == nil && latest == nil && session.summary == nil && session.recentSteps.isEmpty {
+                Text(session.agent == .cloud || session.agent == .codexCloud
+                     ? "Cloud sessions share only progress, not prompts or replies."
+                     : "No details yet.")
+                    .font(DSFont.sans(11, .medium))
+                    .foregroundStyle(Color.white.opacity(0.5))
+            }
+            Spacer(minLength: 0)
+            HStack(spacing: 6) {
+                Spacer()
+                if model.pendingApproval(for: session) != nil {
+                    Button("Deny") { model.decide(session, allow: false) }
+                        .buttonStyle(BCButtonStyle(variant: .secondary, size: .sm))
+                    Button("Allow") { model.decide(session, allow: true) }
+                        .buttonStyle(BCButtonStyle(variant: .primary, size: .sm))
+                } else if session.link != nil || session.hostAppBundleID != nil {
+                    Button("Open") { model.open(session) }
+                        .buttonStyle(BCButtonStyle(variant: .secondary, size: .sm))
+                }
+            }
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color.white.opacity(0.06)))
+        .padding(.horizontal, 4)
+        .padding(.bottom, 6)
+        .clipped()
+        .task(id: session.lastActivityAt) {
+            // For local Claude Code, read the agent's latest words straight from the transcript.
+            guard let path = session.transcriptPath else { return }
+            let text = await Task.detached(priority: .utility) { ClaudeTranscript.lastAssistantText(atPath: path) }.value
+            latest = Format.snippet(text, limit: 200)
+        }
+    }
+
+    private func labeled(_ label: String, _ text: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            Text(label.uppercased())
+                .font(DSFont.sans(9, .heavy))
+                .tracking(0.8)
+                .foregroundStyle(Color.white.opacity(0.4))
+                .frame(width: 58, alignment: .leading)
+            Text(text)
+                .font(DSFont.sans(11.5, .medium))
+                .foregroundStyle(Color.white.opacity(0.85))
+                .lineLimit(2)
+                .fixedSize(horizontal: false, vertical: true)
+        }
     }
 }
 

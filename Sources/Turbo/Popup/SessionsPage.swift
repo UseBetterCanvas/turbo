@@ -139,7 +139,12 @@ struct SessionRowView: View {
                 .foregroundStyle(DS.Palette.textTertiary)
                 .help("Dismiss")
             }
-            if canOpen {
+            if model.pendingApproval(for: session) != nil {
+                Button("Deny") { model.decide(session, allow: false) }
+                    .buttonStyle(BCButtonStyle(variant: .secondary, size: .sm))
+                Button("Allow") { model.decide(session, allow: true) }
+                    .buttonStyle(BCButtonStyle(variant: .primary, size: .sm))
+            } else if canOpen {
                 Button(isWaiting ? "Respond" : "Open") { model.open(session) }
                     .buttonStyle(BCButtonStyle(variant: isWaiting ? .primary : .secondary, size: .sm))
             }

@@ -50,6 +50,8 @@ public struct AgentEvent: Equatable, Sendable {
     public var title: String?
     /// Where clicking the session should take you (a cloud session's page).
     public var link: URL?
+    /// What the user asked (local sessions only; cloud pings never include it).
+    public var prompt: String?
     public var date: Date
 
     public init(
@@ -61,6 +63,7 @@ public struct AgentEvent: Equatable, Sendable {
         hostAppBundleID: String? = nil,
         title: String? = nil,
         link: URL? = nil,
+        prompt: String? = nil,
         date: Date = Date()
     ) {
         self.agent = agent
@@ -71,6 +74,7 @@ public struct AgentEvent: Equatable, Sendable {
         self.hostAppBundleID = hostAppBundleID
         self.title = title
         self.link = link
+        self.prompt = prompt
         self.date = date
     }
 }
@@ -112,8 +116,38 @@ public enum EventParser {
             cwd: obj["cwd"] as? String,
             kind: kind,
             transcriptPath: obj["transcript_path"] as? String,
+            prompt: obj["prompt"] as? String,
             date: now
         )
+    }
+
+    /// A Claude Code permission prompt, from the `PermissionRequest` hook.
+    public struct PermissionAsk: Equatable, Sendable {
+        public var sessionID: String
+        public var cwd: String?
+        public var tool: String
+        /// What it wants to do, in one line: the command, the file, or the URL.
+        public var detail: String?
+    }
+
+    public static func parsePermissionRequest(_ data: Data) -> PermissionAsk? {
+        guard let obj = jsonObject(data), let tool = obj["tool_name"] as? String else { return nil }
+        let input = obj["tool_input"] as? [String: Any] ?? [:]
+        let raw = (input["command"] as? String)
+            ?? (input["file_path"] as? String).map { URL(fileURLWithPath: $0).lastPathComponent }
+            ?? (input["url"] as? String)
+            ?? (input["pattern"] as? String)
+            ?? (input["description"] as? String)
+        let detail = raw.map { $0.replacingOccurrences(of: "\n", with: " ").trimmingCharacters(in: .whitespaces) }
+            .map { $0.count > 160 ? String($0.prefix(159)) + "…" : $0 }
+        return PermissionAsk(sessionID: (obj["session_id"] as? String) ?? "claude", cwd: obj["cwd"] as? String, tool: tool, detail: detail)
+    }
+
+    /// The JSON a PermissionRequest hook prints to allow or deny.
+    public static func permissionDecision(allow: Bool) -> String {
+        allow
+            ? #"{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow"}}}"#
+            : #"{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"deny","message":"Denied from Turbo"}}}"#
     }
 
     /// Parses the JSON Codex passes as the last argv element to its `notify` program.

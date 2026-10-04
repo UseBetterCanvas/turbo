@@ -40,6 +40,8 @@ enum IslandLayout {
     static let floatingIdleSize = CGSize(width: 86, height: 30)
     static let listFooterHeight: CGFloat = 40
     static let listHeadlineHeight: CGFloat = 26
+    /// Extra room when a session's details are open in the hover list.
+    static let detailHeight: CGFloat = 132
     static let floatingCompactWidth: CGFloat = 248
     static let floatingCompactHeight: CGFloat = 38
     static let floatingGap: CGFloat = 6
@@ -71,7 +73,7 @@ enum IslandLayout {
         }
     }
 
-    static func size(for presentation: IslandPresentation, geometry: NotchGeometry, rows: Int) -> CGSize {
+    static func size(for presentation: IslandPresentation, geometry: NotchGeometry, rows: Int, detail: Bool = false) -> CGSize {
         let notch = geometry.notchSize
         let flare = geometry.docked ? 2 * topRadius(for: presentation) : 0
         let cardWidth = max(Self.cardWidth, notch.width + 80) + flare
@@ -90,7 +92,7 @@ enum IslandLayout {
             return CGSize(width: cardWidth, height: headroom(geometry) + 104)
         case .list:
             let count = CGFloat(min(max(rows, 1), maxRows))
-            return CGSize(width: cardWidth, height: headroom(geometry) + listHeadlineHeight + count * rowHeight + 10 + listFooterHeight)
+            return CGSize(width: cardWidth, height: headroom(geometry) + listHeadlineHeight + count * rowHeight + (detail ? detailHeight : 0) + 10 + listFooterHeight)
         }
     }
 
@@ -98,8 +100,8 @@ enum IslandLayout {
     /// recent sessions; when floating, an idle Turbo is invisible and leaves the notch alone.
     /// The area that catches the mouse: the island itself, in every shape. While the pop-up
     /// is open it handles its own events.
-    static func hitRect(for presentation: IslandPresentation, geometry: NotchGeometry, rows: Int) -> NSRect {
-        var size = size(for: presentation, geometry: geometry, rows: rows)
+    static func hitRect(for presentation: IslandPresentation, geometry: NotchGeometry, rows: Int, detail: Bool = false) -> NSRect {
+        var size = size(for: presentation, geometry: geometry, rows: rows, detail: detail)
         if case .hidden = presentation { size = .zero }
         let frame = geometry.screenFrame
         return NSRect(

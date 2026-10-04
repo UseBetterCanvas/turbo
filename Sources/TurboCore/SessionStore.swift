@@ -32,6 +32,10 @@ public struct AgentSession: Identifiable, Equatable, Sendable {
     public var link: URL?
     /// The last turn ended in an error or was cancelled (shown as failed, not done).
     public var failed = false
+    /// What was asked to start this turn (local sessions only).
+    public var lastPrompt: String?
+    /// The latest steps this turn, newest last (tool names).
+    public var recentSteps: [String] = []
 
     public init(agent: Agent, sessionID: String, cwd: String? = nil, lastActivityAt: Date) {
         self.agent = agent
@@ -116,10 +120,18 @@ public final class SessionStore {
                 startTurn(&s, at: now)
                 changes.append(.started(s))
             }
+            if let prompt = event.prompt?.trimmingCharacters(in: .whitespacesAndNewlines), !prompt.isEmpty {
+                s.lastPrompt = prompt
+            }
 
         case let .activity(tool):
             s.lastActivityAt = now
-            if let tool { s.lastTool = tool }
+            if let tool {
+                s.lastTool = tool
+                // Pre and Post hooks both report a tool; keep one entry per step.
+                if s.recentSteps.last != tool || s.phase != .cooking { s.recentSteps.append(tool) }
+                if s.recentSteps.count > 6 { s.recentSteps.removeFirst(s.recentSteps.count - 6) }
+            }
             switch s.phase {
             case .cooking:
                 s.beats += 1
@@ -211,6 +223,8 @@ public final class SessionStore {
         s.beats = 0
         s.lastTool = nil
         s.failed = false
+        s.recentSteps = []
+        s.lastPrompt = nil
     }
 
     private func resolveKey(for event: AgentEvent) -> String {

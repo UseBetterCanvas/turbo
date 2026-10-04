@@ -26,6 +26,23 @@ public enum HookInstaller {
         case unexpectedHooksShape
     }
 
+    /// The permission hook prints Turbo's answer (allow/deny JSON) to stdout, so unlike the
+    /// others its output is kept. If Turbo doesn't answer (not running, or it timed out), it
+    /// prints nothing and Claude Code shows its normal prompt.
+    public static func claudeApprovalCommand(port: Int = defaultPort) -> String {
+        "curl -s -m 75 --noproxy '*' -X POST -H 'Content-Type: application/json' --data-binary @- "
+            + "\"http://127.0.0.1:\(port)/hook/claude/permission?app=${__CFBundleIdentifier:-}&term=${TERM_PROGRAM:-}\" "
+            + "2>/dev/null || true # \(marker)"
+    }
+
+    public static let approvalEvent = "PermissionRequest"
+
+    public static func isClaudeApprovalInstalled(_ settings: Data?) -> Bool {
+        guard let settings, let root = EventParser.jsonObject(settings),
+              let hooks = root["hooks"] as? [String: Any] else { return false }
+        return (hooks[approvalEvent] as? [[String: Any]])?.contains(where: isOurs) ?? false
+    }
+
     public static func isClaudeInstalled(_ settings: Data?) -> Bool {
         guard let settings, let root = EventParser.jsonObject(settings),
               let hooks = root["hooks"] as? [String: Any] else { return false }
@@ -44,6 +61,10 @@ public enum HookInstaller {
             groups.append(group)
             hooks[event] = groups
         }
+        // Approve from Turbo: a separate hook that waits for your answer.
+        var approval = (hooks[approvalEvent] as? [[String: Any]] ?? []).filter { !isOurs($0) }
+        approval.append(["matcher": "*", "hooks": [["type": "command", "command": claudeApprovalCommand(port: port), "timeout": 90]]])
+        hooks[approvalEvent] = approval
         root["hooks"] = hooks
         return try serialize(root)
     }

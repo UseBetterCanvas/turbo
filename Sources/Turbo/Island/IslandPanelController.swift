@@ -108,7 +108,7 @@ final class IslandPanelController {
     }
 
     private func updateHover() {
-        let rect = IslandLayout.hitRect(for: model.presentation, geometry: state.geometry, rows: model.sessions.count)
+        let rect = IslandLayout.hitRect(for: model.presentation, geometry: state.geometry, rows: model.sessions.count, detail: model.detailSessionID != nil)
         let location = NSEvent.mouseLocation
         let inside = rect.height > 0 && rect.insetBy(dx: -2, dy: -2).contains(location)
         if panel.ignoresMouseEvents == inside { panel.ignoresMouseEvents = !inside }
