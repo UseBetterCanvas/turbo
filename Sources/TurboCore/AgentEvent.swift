@@ -6,6 +6,8 @@ public enum Agent: String, Codable, Sendable, CaseIterable {
     case cowork
     /// Claude Code running in a cloud session (claude.ai/code), heard through the relay.
     case cloud
+    /// Codex cloud tasks (chatgpt.com/codex), read with `codex cloud list`.
+    case codexCloud
 
     public var displayName: String {
         switch self {
@@ -13,6 +15,7 @@ public enum Agent: String, Codable, Sendable, CaseIterable {
         case .codex: return "Codex"
         case .cowork: return "Cowork"
         case .cloud: return "Claude Code (cloud)"
+        case .codexCloud: return "Codex (cloud)"
         }
     }
 }

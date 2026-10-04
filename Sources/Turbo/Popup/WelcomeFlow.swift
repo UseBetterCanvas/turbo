@@ -6,15 +6,14 @@ import TurboCore
 struct WelcomeFlow: View {
     @EnvironmentObject private var model: AppModel
     @State private var step = 0
-    private let steps = 4
+    private let steps = 3
 
     var body: some View {
         VStack(spacing: 0) {
             Group {
                 switch step {
                 case 0: WelcomeIntro()
-                case 1: WelcomeMode()
-                case 2: WelcomeConnect()
+                case 1: WelcomeConnect()
                 default: WelcomeTry()
                 }
             }
@@ -108,30 +107,6 @@ private struct WelcomeIntro: View {
     }
 }
 
-private struct WelcomeMode: View {
-    @EnvironmentObject private var prefs: Preferences
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: DS.Space.xl) {
-            PageHeader(title: "How should Turbo tell you?", subtitle: "You can switch any time on the Sessions page.")
-            HStack(spacing: DS.Space.l) {
-                ChoiceCard(
-                    title: "Island",
-                    detail: "A quiet heads-up in the notch when a session finishes or needs you.",
-                    selected: prefs.mode == .island,
-                    action: { prefs.mode = .island }
-                ) { IslandPreview() }
-                ChoiceCard(
-                    title: "Visualizer",
-                    detail: "The island, plus a full-screen light show that dances while your agents work.",
-                    selected: prefs.mode == .visualizer,
-                    action: { prefs.mode = .visualizer }
-                ) { VisualizerPreview() }
-            }
-        }
-    }
-}
-
 private struct WelcomeConnect: View {
     @EnvironmentObject private var model: AppModel
     @EnvironmentObject private var prefs: Preferences
@@ -173,6 +148,7 @@ private struct WelcomeConnect: View {
 
             HStack(spacing: DS.Space.m) {
                 compact(.codex, ready: Integrations.isCodexPresent)
+                compact(.codexCloud, ready: { if case .watching = model.codexCloudState { return true } else { return false } }())
                 compact(.cowork, ready: Integrations.isCoworkPresent)
             }
 
@@ -212,7 +188,7 @@ private struct WelcomeTry: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: DS.Space.l) {
-            PageHeader(title: "See it in action", subtitle: "Play a pretend busy afternoon: four sessions, one needs you. Watch the notch.")
+            PageHeader(title: "See it in action", subtitle: "Play a pretend busy afternoon: five sessions, one needs you. Watch the notch.")
 
             Card {
                 HStack(spacing: DS.Space.l) {
@@ -220,7 +196,7 @@ private struct WelcomeTry: View {
                         .frame(width: 210, height: 112)
                         .clipShape(RoundedRectangle(cornerRadius: DS.Radius.m, style: .continuous))
                     VStack(alignment: .leading, spacing: DS.Space.m) {
-                        Text("The island shows how many are cooking. Finished ones take turns saying so. Click the paw in your menu bar any time for the full board.")
+                        Text("Turbo lives in the notch. Hover it to see every session, click it for the full board, and finished sessions pop out on their own.")
                             .font(DS.Typography.body)
                             .foregroundStyle(DS.Palette.textSecondary)
                             .fixedSize(horizontal: false, vertical: true)

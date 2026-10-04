@@ -669,6 +669,7 @@ extension Agent {
         case .codex: return "Nothing to set up. Turbo reads Codex's session logs to see when it starts and finishes."
         case .cowork: return "Nothing to set up. Turbo reads Cowork's session logs from the Claude desktop app."
         case .cloud: return "Claude Code sessions on claude.ai/code. Add one setup script to your cloud environment and every session checks in."
+        case .codexCloud: return "Codex cloud tasks from chatgpt.com/codex, the IDE or your phone. Turbo asks the Codex CLI for their status, using your existing login."
         }
     }
 }

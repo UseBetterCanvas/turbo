@@ -76,6 +76,7 @@ final class Preferences: ObservableObject {
     @Published var watchCoworkSessions: Bool { didSet { defaults.set(watchCoworkSessions, forKey: Key.watchCowork) } }
     @Published var islandPlacement: IslandPlacement { didSet { defaults.set(islandPlacement.rawValue, forKey: Key.islandPlacement) } }
     @Published var cloudEnabled: Bool { didSet { defaults.set(cloudEnabled, forKey: Key.cloudEnabled) } }
+    @Published var watchCodexCloud: Bool { didSet { defaults.set(watchCodexCloud, forKey: Key.watchCodexCloud) } }
     /// The private relay channel cloud sessions post to. Generated once; resettable.
     @Published var cloudChannel: String { didSet { defaults.set(cloudChannel, forKey: Key.cloudChannel) } }
     @Published var visualizerAutoOpen: Bool { didSet { defaults.set(visualizerAutoOpen, forKey: Key.visualizerAutoOpen) } }
@@ -101,6 +102,7 @@ final class Preferences: ObservableObject {
         static let watchCowork = "watchCoworkSessions"
         static let islandPlacement = "islandPlacement"
         static let cloudEnabled = "cloudEnabled"
+        static let watchCodexCloud = "watchCodexCloud"
         static let cloudChannel = "cloudChannel"
         static let visualizerAutoOpen = "visualizerAutoOpen"
         static let visualizerFullScreen = "visualizerFullScreen"
@@ -119,9 +121,10 @@ final class Preferences: ObservableObject {
             Key.returnToTerminal: true,
             Key.watchCodex: true,
             Key.watchCowork: true,
-            Key.islandPlacement: IslandPlacement.automatic.rawValue,
+            Key.islandPlacement: IslandPlacement.notch.rawValue,
             Key.cloudEnabled: false,
-            Key.visualizerAutoOpen: true,
+            Key.watchCodexCloud: true,
+            Key.visualizerAutoOpen: false,
             Key.visualizerFullScreen: true,
             Key.visualizerAutoClose: true,
             Key.visualizerPreset: VisualizerPreset.magnetosphere.rawValue,
@@ -136,6 +139,7 @@ final class Preferences: ObservableObject {
         watchCoworkSessions = defaults.bool(forKey: Key.watchCowork)
         islandPlacement = IslandPlacement(rawValue: defaults.string(forKey: Key.islandPlacement) ?? "") ?? .automatic
         cloudEnabled = defaults.bool(forKey: Key.cloudEnabled)
+        watchCodexCloud = defaults.bool(forKey: Key.watchCodexCloud)
         let channel = defaults.string(forKey: Key.cloudChannel).flatMap { $0.isEmpty ? nil : $0 } ?? CloudRelay.newChannel()
         defaults.set(channel, forKey: Key.cloudChannel)
         cloudChannel = channel

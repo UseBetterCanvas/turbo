@@ -56,6 +56,8 @@ struct AgentsPage: View {
                 Toggle("Watch Codex", isOn: $prefs.watchCodexSessions).toggleStyle(BCSwitchStyle()).labelsHidden()
             }
 
+            CodexCloudCard()
+
             AgentSetupCard(agent: .cowork, status: watchStatus(.cowork, enabled: prefs.watchCoworkSessions, present: Integrations.isCoworkPresent)) {
                 Toggle("Watch Cowork", isOn: $prefs.watchCoworkSessions).toggleStyle(BCSwitchStyle()).labelsHidden()
             }
@@ -236,6 +238,71 @@ private struct CloudAgentCard: View {
     }
 }
 
+/// Codex cloud: zero setup when the Codex CLI is installed and signed in.
+struct CodexCloudCard: View {
+    @EnvironmentObject private var model: AppModel
+    @EnvironmentObject private var prefs: Preferences
+    @State private var copied = false
+
+    var body: some View {
+        AgentSetupCard(agent: .codexCloud, status: status) {
+            Toggle("Watch Codex cloud", isOn: $prefs.watchCodexCloud).toggleStyle(BCSwitchStyle()).labelsHidden()
+        } footer: {
+            if prefs.watchCodexCloud {
+                HStack(alignment: .center, spacing: DS.Space.m) {
+                    switch model.codexCloudState {
+                    case .notInstalled:
+                        Text("Install the Codex CLI, then sign in with your ChatGPT account.")
+                            .font(DS.Typography.caption).foregroundStyle(DS.Palette.textSecondary)
+                        Spacer(minLength: 0)
+                        copyButton("brew install codex && codex login")
+                    case .notSignedIn:
+                        Text("Sign in to the Codex CLI with your ChatGPT account.")
+                            .font(DS.Typography.caption).foregroundStyle(DS.Palette.textSecondary)
+                        Spacer(minLength: 0)
+                        copyButton("codex login")
+                    case let .failed(message):
+                        Text(message).font(DS.Typography.caption).foregroundStyle(DS.Palette.bad).lineLimit(2)
+                        Spacer(minLength: 0)
+                    case let .watching(count):
+                        Text("Checking \(count) recent task\(count == 1 ? "" : "s") every 20 seconds.")
+                            .font(DS.Typography.caption).foregroundStyle(DS.Palette.textSecondary)
+                        Spacer(minLength: 0)
+                    case .checking, .off:
+                        Text("Looking for the Codex CLI…").font(DS.Typography.caption).foregroundStyle(DS.Palette.textSecondary)
+                        Spacer(minLength: 0)
+                    }
+                    Button("Check Now") { model.checkCodexCloudNow() }
+                        .buttonStyle(SecondaryButtonStyle())
+                }
+            }
+        }
+    }
+
+    private var status: (String, StatusTone) {
+        guard prefs.watchCodexCloud else { return ("Off", .neutral) }
+        switch model.codexCloudState {
+        case .off, .checking: return ("Checking", .neutral)
+        case .watching: return ("Watching", .good)
+        case .notInstalled: return ("Needs Codex CLI", .attention)
+        case .notSignedIn: return ("Sign in needed", .attention)
+        case .failed: return ("Can't reach", .bad)
+        }
+    }
+
+    private func copyButton(_ command: String) -> some View {
+        Button {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(command, forType: .string)
+            copied = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2) { copied = false }
+        } label: {
+            Label(copied ? "Copied" : "Copy Command", systemImage: copied ? "checkmark" : "doc.on.doc")
+        }
+        .buttonStyle(PrimaryButtonStyle())
+    }
+}
+
 /// An agent with its status, a control, and optional extra content underneath.
 struct AgentSetupCard<Accessory: View, Footer: View>: View {
     let agent: Agent
@@ -342,9 +409,9 @@ struct IslandPage: View {
         switch prefs.islandPlacement {
         case .automatic:
             if let neighbor { return "\(neighbor) is using the notch, so Turbo floats just below it for now." }
-            return "In the notch. If another notch app starts (HeyClicky, NotchNook, Alcove), Turbo moves just below it."
+            return "In the notch, moving just below it while another notch app (HeyClicky, NotchNook, Alcove) is running."
         case .notch:
-            return neighbor.map { "\($0) also draws in the notch, so the two may overlap." } ?? "Always in the notch."
+            return neighbor.map { "Grows from the notch. \($0) also uses the notch, so if they overlap, pick Below the notch." } ?? "Grows from the notch, like the iPhone's Dynamic Island."
         case .belowNotch:
             return "Always just below the notch, leaving the notch to other apps."
         }
@@ -359,7 +426,7 @@ struct VisualizerPage: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: DS.Space.xl) {
-            PageHeader(title: "Visualizer", subtitle: "A light show that dances to your agents' work. Every step they take is a beat.")
+            PageHeader(title: "Visualizer", subtitle: "A fun, full-screen view of your sessions' progress. Every step an agent takes is a beat, and every finished session sets off a finale.")
 
             HStack(spacing: DS.Space.m) {
                 ForEach(VisualizerPreset.allCases) { preset in
@@ -370,7 +437,7 @@ struct VisualizerPage: View {
             }
 
             SettingsGroup(title: "Behavior") {
-                ToggleRow(title: "Open when something starts cooking", detail: "Only in Visualizer mode.", isOn: $prefs.visualizerAutoOpen)
+                ToggleRow(title: "Open automatically when something starts cooking", detail: "Off by default. It's always one click away from the hover list and the pop-up.", isOn: $prefs.visualizerAutoOpen)
                 RowDivider()
                 ToggleRow(title: "Open in full screen", isOn: $prefs.visualizerFullScreen)
                 RowDivider()

@@ -141,6 +141,61 @@ final class CloudRelayTests: XCTestCase {
     }
 }
 
+final class CodexCloudTests: XCTestCase {
+    func json(_ tasks: [(String, String, String)]) -> Data {
+        let items = tasks.map { id, status, updated in
+            #"{"id":"\#(id)","url":"https://chatgpt.com/codex/tasks/\#(id)","title":"Fix \#(id)","status":"\#(status)","updated_at":"\#(updated)","environment_id":"env1","environment_label":"waffle-web","summary":"did \#(id)","is_review":false,"attempt_total":1}"#
+        }
+        return Data(#"{"tasks":[\#(items.joined(separator: ","))],"cursor":null}"#.utf8)
+    }
+
+    func testParseList() throws {
+        let tasks = try XCTUnwrap(CodexCloud.parseList(json([("t1", "running", "1")])))
+        XCTAssertEqual(tasks.count, 1)
+        XCTAssertEqual(tasks[0].environment, "waffle-web")
+        XCTAssertEqual(tasks[0].url?.absoluteString, "https://chatgpt.com/codex/tasks/t1")
+        XCTAssertNil(CodexCloud.parseList(Data("nope".utf8)))
+    }
+
+    func testStatusMatching() {
+        XCTAssertEqual(CodexCloud.Phase(status: "in_progress"), .working)
+        XCTAssertEqual(CodexCloud.Phase(status: "PENDING"), .working)
+        XCTAssertEqual(CodexCloud.Phase(status: "ready"), .done)
+        XCTAssertEqual(CodexCloud.Phase(status: "completed"), .done)
+        XCTAssertEqual(CodexCloud.Phase(status: "applied"), .done)
+        XCTAssertEqual(CodexCloud.Phase(status: "error"), .failed)
+        XCTAssertEqual(CodexCloud.Phase(status: "cancelled"), .failed)
+        XCTAssertEqual(CodexCloud.Phase(status: "weird"), .unknown)
+    }
+
+    func testTrackerOnlyAnnouncesChanges() {
+        let tracker = CodexCloud.Tracker()
+        // First poll: the running task appears, the old finished one stays quiet.
+        let first = tracker.update(with: CodexCloud.parseList(json([("t1", "running", "1"), ("old", "ready", "0")]))!)
+        XCTAssertEqual(first.map(\.kind), [.promptSubmitted])
+        XCTAssertEqual(first.first?.agent, .codexCloud)
+        XCTAssertEqual(first.first?.title, "Fix t1")
+        // Nothing changed.
+        XCTAssertTrue(tracker.update(with: CodexCloud.parseList(json([("t1", "running", "1"), ("old", "ready", "0")]))!).isEmpty)
+        // Progress tick, then it finishes, and a new one starts.
+        XCTAssertEqual(tracker.update(with: CodexCloud.parseList(json([("t1", "running", "2")]))!).map(\.kind), [.activity(tool: nil)])
+        let last = tracker.update(with: CodexCloud.parseList(json([("t1", "ready", "3"), ("t2", "pending", "3")]))!)
+        XCTAssertEqual(last.map(\.kind), [.turnComplete(summary: "did t1"), .promptSubmitted])
+    }
+
+    func testTrackerFeedsStore() {
+        let tracker = CodexCloud.Tracker()
+        let store = SessionStore()
+        for e in tracker.update(with: CodexCloud.parseList(json([("t1", "running", "1")]))!) { store.apply(e) }
+        var finished: AgentSession?
+        for e in tracker.update(with: CodexCloud.parseList(json([("t1", "ready", "2")]))!) {
+            if case let .finished(s) = store.apply(e).first { finished = s }
+        }
+        XCTAssertEqual(finished?.projectName, "Fix t1")
+        XCTAssertEqual(finished?.link?.absoluteString, "https://chatgpt.com/codex/tasks/t1")
+    }
+}
+
 final class HTTPTests: XCTestCase {
     func testParseAndRoute() throws {
         let body = #"{"hook_event_name":"Stop","session_id":"z"}"#
