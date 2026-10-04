@@ -109,8 +109,18 @@ final class IslandPanelController {
 
     private func updateHover() {
         let rect = IslandLayout.hitRect(for: model.presentation, geometry: state.geometry, rows: model.sessions.count)
-        let inside = rect.height > 0 && rect.insetBy(dx: -2, dy: -2).contains(NSEvent.mouseLocation)
+        let location = NSEvent.mouseLocation
+        let inside = rect.height > 0 && rect.insetBy(dx: -2, dy: -2).contains(location)
         if panel.ignoresMouseEvents == inside { panel.ignoresMouseEvents = !inside }
-        model.setPointerInside(inside)
+        // Over the idle island's gear (its right side), stay put so the gear can be clicked.
+        var overGear = false
+        if inside, model.presentation == .idle {
+            let geometry = state.geometry
+            let gearStart = geometry.docked && geometry.hasNotch
+                ? geometry.screenFrame.midX + geometry.notchSize.width / 2
+                : rect.maxX - 26
+            overGear = location.x >= gearStart
+        }
+        model.setPointerInside(inside, expand: !overGear)
     }
 }

@@ -99,6 +99,7 @@ final class AppModel: ObservableObject {
     private let codexTailer = SessionLogTailer(source: CodexRolloutSource())
     private let coworkTailer = SessionLogTailer(source: CoworkSessionSource())
     private var hoverTask: Task<Void, Never>?
+    private var expandRequested = false
     private var loops: [Task<Void, Never>] = []
     private var spotlightTask: Task<Void, Never>?
     private var island: IslandPanelController?
@@ -203,14 +204,18 @@ final class AppModel: ObservableObject {
         if preferences.watchCoworkSessions { coworkTailer.poll() }
     }
 
-    func setPointerInside(_ inside: Bool) {
-        guard inside != pointerInside else { return }
+    /// `expand: false` keeps the island as it is while the pointer is over a control on it
+    /// (the idle gear), so the control doesn't move away before it's clicked.
+    func setPointerInside(_ inside: Bool, expand: Bool = true) {
+        let wantsExpand = inside && expand
+        guard inside != pointerInside || wantsExpand != expandRequested else { return }
         pointerInside = inside
+        expandRequested = wantsExpand
         hoverTask?.cancel()
         hoverTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(nanoseconds: inside ? 140_000_000 : 260_000_000)
-            guard let self, !Task.isCancelled, self.pointerInside == inside else { return }
-            self.isHoveringIsland = inside
+            try? await Task.sleep(nanoseconds: wantsExpand ? 140_000_000 : 260_000_000)
+            guard let self, !Task.isCancelled, self.expandRequested == wantsExpand else { return }
+            self.isHoveringIsland = wantsExpand
         }
     }
 
@@ -381,10 +386,23 @@ final class AppModel: ObservableObject {
     static let claudeAppBundleID = "com.anthropic.claudefordesktop"
     static let chatGPTAppBundleID = "com.openai.chat"
 
-    /// Whether the app for this kind of session is installed (for the settings hint).
+    /// Whether Open can use the app for this kind of session (the same check Open uses).
     static func appInstalled(for agent: Agent) -> Bool {
-        let id = agent == .codexCloud ? chatGPTAppBundleID : claudeAppBundleID
-        return NSWorkspace.shared.urlForApplication(withBundleIdentifier: id) != nil
+        if agent == .codexCloud {
+            return NSWorkspace.shared.urlForApplication(withBundleIdentifier: chatGPTAppBundleID) != nil
+        }
+        return claudeAppLink(for: URL(string: "https://claude.ai/code")!) != nil
+    }
+
+    /// The claude:// version of a claude.ai link, but only if the Claude app is the one that
+    /// handles claude:// (not some other app that registered the scheme).
+    static func claudeAppLink(for link: URL) -> URL? {
+        var components = URLComponents(url: link, resolvingAgainstBaseURL: false)
+        components?.scheme = "claude"
+        guard let deep = components?.url,
+              let handler = NSWorkspace.shared.urlForApplication(toOpen: deep),
+              Bundle(url: handler)?.bundleIdentifier == claudeAppBundleID else { return nil }
+        return deep
     }
 
     /// Opens a session's page in the Claude/ChatGPT app or the browser, per the preference.
@@ -393,14 +411,14 @@ final class AppModel: ObservableObject {
             switch agent {
             case .codexCloud:
                 if let app = NSWorkspace.shared.urlForApplication(withBundleIdentifier: Self.chatGPTAppBundleID) {
-                    NSWorkspace.shared.open([link], withApplicationAt: app, configuration: NSWorkspace.OpenConfiguration())
+                    NSWorkspace.shared.open([link], withApplicationAt: app, configuration: NSWorkspace.OpenConfiguration()) { _, error in
+                        // If the app can't take it, the browser still gets you there.
+                        if error != nil { DispatchQueue.main.async { NSWorkspace.shared.open(link) } }
+                    }
                     return
                 }
             default:
-                // The Claude app handles claude:// links to claude.ai pages.
-                var components = URLComponents(url: link, resolvingAgainstBaseURL: false)
-                components?.scheme = "claude"
-                if let deep = components?.url, NSWorkspace.shared.urlForApplication(toOpen: deep) != nil {
+                if let deep = Self.claudeAppLink(for: link) {
                     NSWorkspace.shared.open(deep)
                     return
                 }
