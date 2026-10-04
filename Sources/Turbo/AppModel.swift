@@ -88,6 +88,9 @@ final class AppModel: ObservableObject {
     let neighbors = NotchNeighbors()
     let pulses = PassthroughSubject<Pulse, Never>()
     let updater = Updater()
+    /// Hears what the Mac is playing, for the visualizer.
+    let music = MusicListener()
+    @Published private(set) var musicState: MusicListener.State = .off
 
     @Published private(set) var sessions: [AgentSession] = []
     @Published private(set) var spotlight: Spotlight?
@@ -138,6 +141,10 @@ final class AppModel: ObservableObject {
     }
     /// False when another app already owns ⌃⌥Space.
     @Published private(set) var hotKeyAvailable = false
+    /// A step the lead session just moved on to, shown briefly under the tiny island.
+    @Published private(set) var peekText: String?
+    private var lastPeek = (key: "", at: Date.distantPast)
+    private var peekTask: Task<Void, Never>?
     @Published var popupOpen = false
     @Published var popupPage: PopupPage = .home
 
@@ -260,6 +267,7 @@ final class AppModel: ObservableObject {
             }
             .store(in: &forwarding)
 
+        music.onState = { [weak self] state in self?.musicState = state }
         updater.autoInstall = { [weak self] in
             guard let self, self.preferences.autoUpdate else { return false }
             // Relaunching clears the board, so only when nothing's cooking or waiting on you.
@@ -292,6 +300,10 @@ final class AppModel: ObservableObject {
         hoverTask = Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: wantsExpand ? 140_000_000 : 260_000_000)
             guard let self, !Task.isCancelled, self.expandRequested == wantsExpand else { return }
+            if wantsExpand && !self.isHoveringIsland {
+                // A soft tick as it opens, felt on a Force Touch trackpad.
+                NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now)
+            }
             self.isHoveringIsland = wantsExpand
             if !wantsExpand { self.detailSessionID = nil }
         }
@@ -326,6 +338,7 @@ final class AppModel: ObservableObject {
 
         case let .beat(session):
             pulses.send(Pulse(agent: session.agent, kind: .beat, tool: session.lastTool))
+            peekIfNewStep(session)
 
         case let .resumed(session):
             pulses.send(Pulse(agent: session.agent, kind: .beat, tool: session.lastTool))
@@ -562,6 +575,7 @@ final class AppModel: ObservableObject {
         let pending = queue.removeFirst()
         approvals[session.id] = queue.isEmpty ? nil : queue
         pending.respond(EventParser.permissionDecision(allow: allow))
+        NSHapticFeedbackManager.defaultPerformer.perform(allow ? .levelChange : .generic, performanceTime: .now)
         if let next = queue.first {
             showApproval(next, sessionID: session.sessionID)
         } else {
@@ -747,6 +761,25 @@ final class AppModel: ObservableObject {
             .filter { $0 != getpid() }
         for pid in pids { kill(pid, SIGINT) }
         return !pids.isEmpty
+    }
+
+    // MARK: Peek
+
+    /// The tiny island grows for a moment to show the step the session it tracks moved on to.
+    /// At most every 6 seconds, so a busy session doesn't make it flicker.
+    private func peekIfNewStep(_ session: AgentSession) {
+        guard preferences.showStepPeeks, presentation == .compact, session.id == lead?.id,
+              let detail = session.activityDetail else { return }
+        let key = session.id + "|" + detail
+        guard key != lastPeek.key, Date().timeIntervalSince(lastPeek.at) >= 6 else { return }
+        lastPeek = (key, Date())
+        peekText = detail
+        peekTask?.cancel()
+        peekTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 3_200_000_000)
+            guard !Task.isCancelled else { return }
+            self?.peekText = nil
+        }
     }
 
     // MARK: Triage

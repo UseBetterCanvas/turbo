@@ -87,8 +87,11 @@ final class VisualizerWindowController: NSObject, NSWindowDelegate {
         case 123: // left arrow
             prefs.visualizerPreset = prefs.visualizerPreset.previous
         default:
-            guard event.charactersIgnoringModifiers?.lowercased() == "f" else { return false }
-            window?.toggleFullScreen(nil)
+            switch event.charactersIgnoringModifiers?.lowercased() {
+            case "f": window?.toggleFullScreen(nil)
+            case "m": prefs.visualizerListens.toggle()
+            default: return false
+            }
         }
         return true
     }

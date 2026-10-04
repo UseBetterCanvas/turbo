@@ -57,8 +57,21 @@ Turbo lives in the notch, like the iPhone's Dynamic Island, and is always exactl
   no done cards, and needs-you still shows silently.
 - The teal dot on the tiny island only counts finished sessions you haven't opened yet.
 
+**Stop:** press **Stop** on any running session (or **S** on the board).
+- Local Claude Code stops before its next step.
+- Local Codex runs get interrupted. Pick one up again with `codex resume`.
+- Claude Code in the cloud stops within a few seconds of its next step. This needs the latest setup script; Settings tells you when yours is out of date.
+- Cowork and Codex cloud can't be reached from outside, so Stop opens them instead.
+
+**Live steps:** rows show Claude's own words for what it's doing ("Waiting for Greptile review on PR #8"). The tiny island briefly grows to show each new step of the session it tracks.
+
+**Updates:** Turbo checks every hour and installs new versions by itself when nothing's cooking. You can turn this off in Settings → General.
+
 **Visualizer:** a fun, full-screen view of the progress, one click away from the hover list
 or the pop-up. Every tool call is a beat and every finished session sets off a finale.
+Turn on **Move With Your Music** (or press **M**) and it pulses to Spotify, Apple Music or whatever
+your Mac is playing, through speakers or AirPods. macOS asks for Screen Recording permission once.
+Turbo only reads the sound.
 
 If another notch app is running (HeyClicky, NotchNook, Alcove…) and the two overlap,
 Settings → Island → Placement can move Turbo just below the notch.

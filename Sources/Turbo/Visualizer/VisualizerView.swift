@@ -11,6 +11,13 @@ struct VisualizerView: View {
     @State private var toast: VisualizerPreset?
     @State private var toastTask: Task<Void, Never>?
 
+    private var musicLabel: String {
+        guard prefs.visualizerListens else { return "Music Off" }
+        if case let .listening(app) = model.musicState { return "♪ " + (app ?? "Music") }
+        if model.musicState == .needsPermission { return "Music Needs Permission" }
+        return "Music"
+    }
+
     var body: some View {
         ZStack {
             TimelineView(.animation) { timeline in
@@ -26,6 +33,7 @@ struct VisualizerView: View {
                     HStack(spacing: 10) {
                         KeyHint(keys: "← →", label: "Look")
                         KeyHint(keys: "F", label: "Full Screen")
+                        KeyHint(keys: "M", label: musicLabel)
                         KeyHint(keys: "esc", label: "Close")
                     }
                     .opacity(chromeVisible ? 1 : 0)
@@ -72,6 +80,15 @@ struct VisualizerView: View {
             if !chromeVisible { chromeVisible = true }
         }
         .onReceive(model.pulses) { engine.handle($0) }
+        .onAppear {
+            let music = model.music
+            engine.music = { music.snapshot() }
+            if prefs.visualizerListens { music.start() }
+        }
+        .onDisappear { model.music.stop() }
+        .onChange(of: prefs.visualizerListens) { on in
+            if on { model.music.start() } else { model.music.stop() }
+        }
         .task {
             // Like a screensaver: after a few still seconds, fade the controls and hide the cursor.
             while !Task.isCancelled {

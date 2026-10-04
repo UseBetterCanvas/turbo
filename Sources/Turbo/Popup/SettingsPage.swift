@@ -455,7 +455,9 @@ private struct IslandSection: View {
                     .font(DS.Typography.bodyStrong.monospacedDigit())
             }
             RowDivider()
-            ToggleRow(title: "Click a card to open its session", isOn: $prefs.returnToTerminalOnClick)
+            ToggleRow(title: "Click a Card to Open Its Session", isOn: $prefs.returnToTerminalOnClick)
+            RowDivider()
+            ToggleRow(title: "Show Each New Step", detail: "The tiny island grows for a moment to show what the session it tracks is doing now.", isOn: $prefs.showStepPeeks)
             RowDivider()
             SettingRow(title: "Sound when done") {
                 HStack(spacing: DS.Space.s) {
@@ -506,11 +508,22 @@ private struct VisualizerSection: View {
                     .frame(width: 300)
             }
             RowDivider()
-            ToggleRow(title: "Open automatically when something starts", isOn: $prefs.visualizerAutoOpen)
+            ToggleRow(title: "Open Automatically When Something Starts", isOn: $prefs.visualizerAutoOpen)
             RowDivider()
-            ToggleRow(title: "Full screen", isOn: $prefs.visualizerFullScreen)
+            ToggleRow(title: "Move With Your Music", detail: musicNote, isOn: $prefs.visualizerListens)
             RowDivider()
-            ToggleRow(title: "Close when it's done", isOn: $prefs.visualizerAutoClose)
+            ToggleRow(title: "Full Screen", isOn: $prefs.visualizerFullScreen)
+            RowDivider()
+            ToggleRow(title: "Close When It's Done", isOn: $prefs.visualizerAutoClose)
+        }
+    }
+
+    private var musicNote: String {
+        switch model.musicState {
+        case let .listening(app): return "Listening to \(app ?? "your Mac"). Works with speakers and AirPods."
+        case .needsPermission: return "Allow Turbo under System Settings → Privacy & Security → Screen Recording. Turbo only reads the sound."
+        case let .failed(message): return "Couldn't listen: \(message)"
+        default: return "Pulses to Spotify or whatever's playing. macOS asks for Screen Recording permission once; Turbo only reads the sound."
         }
     }
 }

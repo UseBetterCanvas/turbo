@@ -10,7 +10,7 @@ struct IslandView: View {
     var body: some View {
         let presentation = model.presentation
         let geometry = state.geometry
-        let size = IslandLayout.size(for: presentation, geometry: geometry, rows: model.sessions.count, detail: model.detailSessionID != nil)
+        let size = IslandLayout.size(for: presentation, geometry: geometry, rows: model.sessions.count, detail: model.detailSessionID != nil, peek: model.peekText != nil)
         // The tiny island swells a touch under the pointer, a beat before it opens.
         let lifted = (presentation == .compact || presentation == .idle) && model.pointerInside
 
@@ -38,6 +38,7 @@ struct IslandView: View {
         .animation(animation(for: presentation), value: geometry)
         .animation(DS.Motion.slow, value: model.sessions.count)
         .animation(DS.Motion.slow, value: lifted)
+        .animation(reduceMotion ? DS.Motion.fast : DS.Motion.dialogOpen, value: model.peekText)
         .preferredColorScheme(.dark)
     }
 
@@ -136,7 +137,8 @@ private struct CompactIsland: View {
         let allAgents = Array(Set(sessions.map(\.agent))).sorted { $0.rawValue < $1.rawValue }
         let agents = Array(allAgents.prefix(2))
 
-        ZStack(alignment: .bottom) {
+        VStack(spacing: 0) {
+            ZStack(alignment: .bottom) {
             HStack(spacing: 0) {
                 // Leading: what's cooking.
                 HStack(spacing: 6) {
@@ -209,11 +211,28 @@ private struct CompactIsland: View {
             }
             .frame(height: geometry.docked ? geometry.notchSize.height : IslandLayout.floatingCompactHeight)
 
-            if !waiting && !reduceMotion {
+            if !waiting && !reduceMotion && model.peekText == nil {
                 CookingShimmer(tint: DS.Palette.textPrimary)
                     .padding(.horizontal, geometry.docked ? 12 : 18)
                     .padding(.bottom, 1)
             }
+            }
+                if let peek = model.peekText {
+                    // The step it just moved on to, like a Live Activity update.
+                    HStack(spacing: 6) {
+                        if let lead { AgentGlyph(agent: lead.agent, size: 10) }
+                        Text(peek)
+                            .font(DSFont.sans(11.5, .semibold))
+                            .foregroundStyle(DS.Palette.textPrimary)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                    }
+                    .padding(.horizontal, 14)
+                    .frame(height: IslandLayout.peekHeight)
+                    .frame(maxWidth: .infinity)
+                    .transition(.blurFade)
+                    .id(peek)
+                }
         }
         // Every tool call is a heartbeat.
         .onReceive(model.pulses.filter { $0.kind == .beat || $0.kind == .start }) { _ in

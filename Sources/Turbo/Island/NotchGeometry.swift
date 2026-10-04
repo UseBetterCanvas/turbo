@@ -49,6 +49,9 @@ enum IslandLayout {
     static let cardWidth: CGFloat = 404
     static let rowHeight: CGFloat = 46
     static let maxRows = 5
+    /// The line a tiny island grows to show the step a session just moved on to.
+    static let peekHeight: CGFloat = 24
+    static let peekMinWidth: CGFloat = 300
 
     /// Distance from the top of the screen to the top of the island.
     static func topInset(_ geometry: NotchGeometry) -> CGFloat {
@@ -74,7 +77,7 @@ enum IslandLayout {
         }
     }
 
-    static func size(for presentation: IslandPresentation, geometry: NotchGeometry, rows: Int, detail: Bool = false) -> CGSize {
+    static func size(for presentation: IslandPresentation, geometry: NotchGeometry, rows: Int, detail: Bool = false, peek: Bool = false) -> CGSize {
         let notch = geometry.notchSize
         let flare = geometry.docked ? 2 * topRadius(for: presentation) : 0
         let cardWidth = max(Self.cardWidth, notch.width + 80) + flare
@@ -86,9 +89,11 @@ enum IslandLayout {
                 ? CGSize(width: notch.width + 2 * idleSideWidth + flare, height: notch.height)
                 : floatingIdleSize
         case .compact:
-            return geometry.docked
+            let base = geometry.docked
                 ? CGSize(width: notch.width + 2 * compactSideWidth + flare, height: notch.height)
                 : CGSize(width: floatingCompactWidth, height: floatingCompactHeight)
+            guard peek else { return base }
+            return CGSize(width: max(base.width, peekMinWidth + flare), height: base.height + peekHeight)
         case let .spotlight(card):
             // Room for the Allow / Deny column on a needs-you card.
             return CGSize(width: cardWidth, height: headroom(geometry) + (card.kind == .needsInput ? 122 : 104))
@@ -102,8 +107,8 @@ enum IslandLayout {
     /// recent sessions; when floating, an idle Turbo is invisible and leaves the notch alone.
     /// The area that catches the mouse: the island itself, in every shape. While the pop-up
     /// is open it handles its own events.
-    static func hitRect(for presentation: IslandPresentation, geometry: NotchGeometry, rows: Int, detail: Bool = false) -> NSRect {
-        var size = size(for: presentation, geometry: geometry, rows: rows, detail: detail)
+    static func hitRect(for presentation: IslandPresentation, geometry: NotchGeometry, rows: Int, detail: Bool = false, peek: Bool = false) -> NSRect {
+        var size = size(for: presentation, geometry: geometry, rows: rows, detail: detail, peek: peek)
         if case .hidden = presentation { size = .zero }
         let frame = geometry.screenFrame
         return NSRect(

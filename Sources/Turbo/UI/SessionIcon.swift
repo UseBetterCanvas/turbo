@@ -61,6 +61,7 @@ struct AgentGlyph: View {
 /// A session at a glance: whose it is (the mark), where it runs (a cloud badge), and what
 /// it needs (a ring while cooking, a gold dot when it's waiting, a check or ✕ when done).
 struct SessionIcon: View {
+    @EnvironmentObject private var model: AppModel
     let session: AgentSession
     var size: CGFloat = 28
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -87,8 +88,11 @@ struct SessionIcon: View {
 
     /// A slow arc that circles the tile while the session cooks.
     @ViewBuilder private var ring: some View {
-        if session.phase == .cooking {
-            let shape = RoundedRectangle(cornerRadius: size * 0.3 + 2, style: .continuous)
+        let shape = RoundedRectangle(cornerRadius: size * 0.3 + 2, style: .continuous)
+        if model.stopping.contains(session.id) {
+            // Stop pressed: a dashed red ring until it lands.
+            shape.strokeBorder(DS.Palette.bad, style: StrokeStyle(lineWidth: 1.5, dash: [3, 3])).padding(-2)
+        } else if session.phase == .cooking {
             if reduceMotion {
                 shape.strokeBorder(DS.Palette.textSecondary.opacity(0.6), lineWidth: 1.5).padding(-2)
             } else {

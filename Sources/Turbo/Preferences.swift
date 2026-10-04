@@ -102,6 +102,9 @@ final class Preferences: ObservableObject {
     @Published var copiedCloudScript: String { didSet { defaults.set(copiedCloudScript, forKey: Key.copiedCloudScript) } }
     /// Install new versions on their own when nothing's cooking.
     @Published var autoUpdate: Bool { didSet { defaults.set(autoUpdate, forKey: Key.autoUpdate) } }
+    /// The tiny island briefly shows each new step of the session it tracks.
+    @Published var visualizerListens: Bool { didSet { defaults.set(visualizerListens, forKey: Key.visualizerListens) } }
+    @Published var showStepPeeks: Bool { didSet { defaults.set(showStepPeeks, forKey: Key.showStepPeeks) } }
     @Published var visualizerAutoOpen: Bool { didSet { defaults.set(visualizerAutoOpen, forKey: Key.visualizerAutoOpen) } }
     @Published var visualizerFullScreen: Bool { didSet { defaults.set(visualizerFullScreen, forKey: Key.visualizerFullScreen) } }
     @Published var visualizerAutoClose: Bool { didSet { defaults.set(visualizerAutoClose, forKey: Key.visualizerAutoClose) } }
@@ -136,6 +139,8 @@ final class Preferences: ObservableObject {
         static let cloudShareTitles = "cloudShareTitles"
         static let copiedCloudScript = "copiedCloudScript"
         static let autoUpdate = "autoUpdate"
+        static let showStepPeeks = "showStepPeeks"
+        static let visualizerListens = "visualizerListens"
     }
 
     /// Visualizer used to be a mode that auto-opened by default. Keep that behavior for anyone who
@@ -172,6 +177,8 @@ final class Preferences: ObservableObject {
             Key.visualizerPreset: VisualizerPreset.magnetosphere.rawValue,
             Key.cloudShareTitles: false,
             Key.autoUpdate: true,
+            Key.showStepPeeks: true,
+            Key.visualizerListens: false,
         ])
         mode = CookMode(rawValue: defaults.string(forKey: Key.mode) ?? "") ?? .island
         playSound = defaults.bool(forKey: Key.playSound)
@@ -196,6 +203,8 @@ final class Preferences: ObservableObject {
         // Set up cloud before Turbo tracked the script? That one predates Stop and step details.
         copiedCloudScript = defaults.string(forKey: Key.copiedCloudScript) ?? (defaults.bool(forKey: Key.cloudEnabled) ? "legacy" : "")
         autoUpdate = defaults.bool(forKey: Key.autoUpdate)
+        showStepPeeks = defaults.bool(forKey: Key.showStepPeeks)
+        visualizerListens = defaults.bool(forKey: Key.visualizerListens)
         migrateVisualizerMode()
     }
 }
