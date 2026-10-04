@@ -6,6 +6,8 @@ public struct SessionLogContext: Equatable {
     public var cwd: String?
     public var title: String?
     public var hostAppBundleID: String?
+    /// The prompt behind the line being parsed, passed along with its event.
+    public var prompt: String?
     /// A sidecar file worth re-reading later (Cowork writes the session title after the fact).
     public var sidecar: URL?
 
@@ -104,11 +106,12 @@ public final class SessionLogTailer {
         while let newline = buffer.firstIndex(of: 0x0A) {
             let line = Data(buffer[buffer.startIndex..<newline])
             buffer = Data(buffer[buffer.index(after: newline)...])
+            state.context.prompt = nil
             guard let kind = source.parse(line: line, context: &state.context), emit else { continue }
             let c = state.context
             onEvent(AgentEvent(
                 agent: source.agent, sessionID: c.sessionID, cwd: c.cwd, kind: kind,
-                hostAppBundleID: c.hostAppBundleID, title: c.title, date: now
+                hostAppBundleID: c.hostAppBundleID, title: c.title, prompt: c.prompt, date: now
             ))
         }
         state.partial = emit ? buffer : Data()
@@ -163,6 +166,10 @@ public struct CodexRolloutSource: SessionLogSource {
             return nil
         case let .event(kind):
             return kind
+        case let .prompt(text):
+            if context.title == nil { context.title = SessionNaming.title(fromPrompt: text) }
+            context.prompt = text
+            return .promptSubmitted
         case nil:
             return nil
         }
@@ -238,6 +245,9 @@ public struct CoworkSessionSource: SessionLogSource {
         case let .event(kind):
             if context.title == nil, let manifest = context.sidecar { Self.applyManifest(at: manifest, to: &context) }
             return kind
+        case let .prompt(text):
+            context.prompt = text
+            return .promptSubmitted
         case nil:
             return nil
         }

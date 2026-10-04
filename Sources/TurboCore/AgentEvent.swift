@@ -128,6 +128,9 @@ public enum EventParser {
         public var tool: String
         /// What it wants to do, in one line: the command, the file, or the URL.
         public var detail: String?
+        /// False when the detail had to be shortened. Turbo then leaves the prompt to the
+        /// terminal, so nobody allows a command they couldn't read in full.
+        public var isComplete: Bool = true
     }
 
     public static func parsePermissionRequest(_ data: Data) -> PermissionAsk? {
@@ -138,9 +141,13 @@ public enum EventParser {
             ?? (input["url"] as? String)
             ?? (input["pattern"] as? String)
             ?? (input["description"] as? String)
-        let detail = raw.map { $0.replacingOccurrences(of: "\n", with: " ").trimmingCharacters(in: .whitespaces) }
-            .map { $0.count > 160 ? String($0.prefix(159)) + "…" : $0 }
-        return PermissionAsk(sessionID: (obj["session_id"] as? String) ?? "claude", cwd: obj["cwd"] as? String, tool: tool, detail: detail)
+        let full = raw.map { $0.replacingOccurrences(of: "\n", with: " ").trimmingCharacters(in: .whitespaces) }
+        let limit = 100
+        let detail = full.map { $0.count > limit ? String($0.prefix(limit - 1)) + "…" : $0 }
+        return PermissionAsk(
+            sessionID: (obj["session_id"] as? String) ?? "claude", cwd: obj["cwd"] as? String, tool: tool, detail: detail,
+            isComplete: (full?.count ?? 0) <= limit
+        )
     }
 
     /// The JSON a PermissionRequest hook prints to allow or deny.
@@ -166,6 +173,8 @@ public enum EventParser {
     public enum RolloutLine: Equatable {
         case meta(id: String?, cwd: String?)
         case event(AgentEventKind)
+        /// Something the person typed. Starts a turn and can name the session.
+        case prompt(String?)
     }
 
     /// Parses one line of a Codex rollout file (~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl).
@@ -184,8 +193,10 @@ public enum EventParser {
             return nil
         case "event_msg":
             switch payload["type"] as? String {
-            case "task_started", "user_message":
+            case "task_started":
                 return .event(.promptSubmitted)
+            case "user_message":
+                return .prompt(payload["message"] as? String)
             case "task_complete":
                 return .event(.turnComplete(summary: payload["last_agent_message"] as? String))
             case "exec_command_begin", "mcp_tool_call_begin", "patch_apply_begin", "web_search_begin":

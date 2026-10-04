@@ -453,11 +453,15 @@ private struct SessionList: View {
 
 private extension SessionList {
     func hoverRow(_ session: AgentSession, _ inside: Bool) {
-        guard inside else { return }
         let id = session.id
         let model = self.model
+        guard inside else {
+            if model.hoveredRowID == id { model.hoveredRowID = nil }
+            return
+        }
+        model.hoveredRowID = id
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak model] in
-            guard let model, model.isHoveringIsland, model.detailSessionID != id else { return }
+            guard let model, model.isHoveringIsland, model.hoveredRowID == id, model.detailSessionID != id else { return }
             withAnimation(DS.Motion.base) { model.detailSessionID = id }
         }
     }
@@ -492,7 +496,7 @@ private struct SessionDetail: View {
                             .background(Capsule().fill(Color.white.opacity(0.1)))
                     }
                     if session.beats > 0 {
-                        Text("\(session.beats) steps")
+                        Text("\(session.beats) updates")
                             .font(DSFont.sans(10, .medium).monospacedDigit())
                             .foregroundStyle(Color.white.opacity(0.45))
                     }
@@ -529,6 +533,8 @@ private struct SessionDetail: View {
             // For local Claude Code, read the agent's latest words straight from the transcript.
             guard let path = session.transcriptPath else { return }
             let text = await Task.detached(priority: .utility) { ClaudeTranscript.lastAssistantText(atPath: path) }.value
+            // A newer activity restarted this task. Its read wins, not this older one.
+            guard !Task.isCancelled else { return }
             latest = Format.snippet(text, limit: 200)
         }
     }
@@ -660,7 +666,8 @@ struct SessionRow: View {
                     .font(DSFont.sans(12.5, .bold))
                     .foregroundStyle(dark ? Color.white : Color.primary)
                     .lineLimit(1)
-                Text(session.statusText(now: now))
+                    .truncationMode(.middle)
+                Text([session.place, session.statusText(now: now)].compactMap { $0 }.joined(separator: " · "))
                     .font(DSFont.sans(11, .medium).monospacedDigit())
                     .foregroundStyle(dark ? Color.white.opacity(0.55) : Color.secondary)
                     .lineLimit(1)

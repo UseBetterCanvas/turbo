@@ -34,7 +34,8 @@ struct NotchGeometry: Equatable {
 /// Island sizes for each presentation, shared by the SwiftUI view and the panel's hit-testing.
 enum IslandLayout {
     /// The panel is a fixed transparent canvas; the island draws inside it.
-    static let canvasSize = CGSize(width: 680, height: 380)
+    /// Tall enough for the biggest shape: a full list with a detail open, under the notch.
+    static let canvasSize = CGSize(width: 680, height: 520)
     static let compactSideWidth: CGFloat = 76
     static let idleSideWidth: CGFloat = 34
     static let floatingIdleSize = CGSize(width: 86, height: 30)

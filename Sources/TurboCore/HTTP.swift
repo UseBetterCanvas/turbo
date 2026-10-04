@@ -88,4 +88,15 @@ public enum HostApp {
         default: return nil
         }
     }
+
+    /// Terminals and editors a coding agent commonly runs in.
+    public static let terminals: Set<String> = [
+        "com.apple.Terminal", "com.googlecode.iterm2", "com.microsoft.VSCode", "dev.warp.Warp-Stable",
+        "com.mitchellh.ghostty", "com.github.wez.wezterm", "co.zeit.hyper", "dev.zed.Zed",
+        "net.kovidgoyal.kitty", "io.alacritty", "com.todesktop.230313mzl4w4u92", "com.exafunction.windsurf",
+    ]
+
+    public static func isTerminal(bundleID: String?) -> Bool {
+        bundleID.map(terminals.contains) ?? false
+    }
 }

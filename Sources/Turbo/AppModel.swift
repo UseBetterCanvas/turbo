@@ -100,7 +100,10 @@ final class AppModel: ObservableObject {
     @Published private(set) var codexCloudState: CodexCloudPoller.State = .off
     @Published private(set) var lastRelayMessage: Date?
     /// Permission prompts you can answer from Turbo, by session id.
-    @Published private(set) var approvals: [String: PendingApproval] = [:]
+    /// Permission prompts waiting on you, oldest first, per session.
+    @Published private(set) var approvals: [String: [PendingApproval]] = [:]
+    /// The session row the pointer is resting on in the hover list.
+    var hoveredRowID: String?
     /// The session whose details are showing in the hover list.
     @Published var detailSessionID: String?
     @Published var popupOpen = false
@@ -280,7 +283,7 @@ final class AppModel: ObservableObject {
 
         case let .finished(session):
             pulses.send(Pulse(agent: session.agent, kind: .finish))
-            approvals.removeValue(forKey: session.id)?.respond("")
+            releaseApprovals(for: session.id)
             dropSpotlights(for: session.id, kind: .needsInput)
             // nil duration means we never saw it start — still worth announcing.
             let worthCelebrating = (session.cookDuration ?? .infinity) >= preferences.minimumCookSeconds
@@ -300,7 +303,7 @@ final class AppModel: ObservableObject {
 
         case let .removed(id):
             dropSpotlights(for: id)
-            approvals.removeValue(forKey: id)?.respond("")
+            releaseApprovals(for: id)
         }
     }
 
@@ -396,25 +399,44 @@ final class AppModel: ObservableObject {
     private func askForApproval(_ request: HTTPRequest, respond: @escaping @Sendable (String) -> Void) {
         guard let ask = EventParser.parsePermissionRequest(request.body) else { respond(""); return }
         let host = HostApp.bundleID(app: request.query["app"], termProgram: request.query["term"])
-        if let host, NSWorkspace.shared.frontmostApplication?.bundleIdentifier == host {
-            respond("")
-            return
-        }
+        let front = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
+        // Already in the terminal (or one we can't tell apart), or a command too long to show
+        // in full: let the normal prompt handle it.
+        let inHost = host.map { $0 == front } ?? HostApp.isTerminal(bundleID: front)
+        guard !inHost, ask.isComplete else { respond(""); return }
         let key = "\(Agent.claude.rawValue):\(ask.sessionID)"
-        approvals[key]?.respond("")
         let pending = PendingApproval(tool: ask.tool, detail: ask.detail, respond: respond)
-        approvals[key] = pending
-        handle(AgentEvent(
-            agent: .claude, sessionID: ask.sessionID, cwd: ask.cwd,
-            kind: .needsInput(message: Self.approvalMessage(tool: ask.tool, detail: ask.detail)),
-            hostAppBundleID: host
-        ))
+        approvals[key, default: []].append(pending)
+        if approvals[key]?.count == 1 { showApproval(pending, sessionID: ask.sessionID, cwd: ask.cwd, host: host) }
         Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: 60_000_000_000)
-            guard let self, self.approvals[key]?.token == pending.token else { return }
-            self.approvals[key] = nil
+            guard let self, let queue = self.approvals[key], let index = queue.firstIndex(where: { $0.token == pending.token }) else { return }
+            self.approvals[key]?.remove(at: index)
             pending.respond("")
+            let rest = self.approvals[key] ?? []
+            if rest.isEmpty { self.approvals[key] = nil }
+            guard index == 0 else { return }
+            if let next = rest.first {
+                self.showApproval(next, sessionID: ask.sessionID)
+            } else {
+                // The prompt is now waiting in the terminal. Say so instead of offering buttons
+                // that no longer work.
+                self.handle(AgentEvent(agent: .claude, sessionID: ask.sessionID, kind: .needsInput(message: "Answer in the terminal: " + Self.approvalMessage(tool: pending.tool, detail: pending.detail))))
+            }
         }
+    }
+
+    private func showApproval(_ pending: PendingApproval, sessionID: String, cwd: String? = nil, host: String? = nil) {
+        handle(AgentEvent(
+            agent: .claude, sessionID: sessionID, cwd: cwd,
+            kind: .needsInput(message: Self.approvalMessage(tool: pending.tool, detail: pending.detail)),
+            hostAppBundleID: host
+        ))
+    }
+
+    /// Hands every open prompt for a session back to the terminal.
+    private func releaseApprovals(for id: String) {
+        approvals.removeValue(forKey: id)?.forEach { $0.respond("") }
     }
 
     /// "Wants to run npm test", "Wants to edit Store.swift"
@@ -428,14 +450,20 @@ final class AppModel: ObservableObject {
     }
 
     func pendingApproval(for session: AgentSession) -> PendingApproval? {
-        approvals[session.id]
+        approvals[session.id]?.first
     }
 
     /// Answers a permission prompt from Turbo.
     func decide(_ session: AgentSession, allow: Bool) {
-        guard let pending = approvals.removeValue(forKey: session.id) else { return }
+        guard var queue = approvals[session.id], !queue.isEmpty else { return }
+        let pending = queue.removeFirst()
+        approvals[session.id] = queue.isEmpty ? nil : queue
         pending.respond(EventParser.permissionDecision(allow: allow))
-        handle(AgentEvent(agent: session.agent, sessionID: session.sessionID, kind: .activity(tool: allow ? pending.tool : nil)))
+        if let next = queue.first {
+            showApproval(next, sessionID: session.sessionID)
+        } else {
+            handle(AgentEvent(agent: session.agent, sessionID: session.sessionID, kind: .activity(tool: allow ? pending.tool : nil)))
+        }
     }
 
     // MARK: Sessions
@@ -645,15 +673,18 @@ final class AppModel: ObservableObject {
         let summary: String
         var title: String?
         var link: URL?
+        var prompt: String?
         switch agent {
         case .claude:
             cwd = "/Users/demo/pancake-stack"
             tools = ["Read", "Edit", "Bash", "Grep", "Write"]
             summary = "Stacked the pancakes: refactored the batter service and all 42 tests pass."
+            prompt = ["Refactor the batter service", "Fix the flaky syrup tests", "Add a stack height limit"].randomElement()
         case .codex:
             cwd = "/Users/demo/omelette-api"
             tools = ["shell", "apply_patch", "shell"]
             summary = "Omelette API is plated. Added the /flip endpoint with tests."
+            prompt = "Add a /flip endpoint with tests"
         case .cowork:
             cwd = "/Users/demo/Receipts"
             tools = ["Read", "Bash", "Write"]
@@ -676,7 +707,7 @@ final class AppModel: ObservableObject {
             handle(AgentEvent(agent: agent, sessionID: id, cwd: cwd, kind: kind, hostAppBundleID: host, title: title, link: link))
         }
         Task { @MainActor in
-            send(.promptSubmitted)
+            handle(AgentEvent(agent: agent, sessionID: id, cwd: cwd, kind: .promptSubmitted, hostAppBundleID: host, title: title, link: link, prompt: prompt))
             let ticks = Int(seconds / 0.35)
             for tick in 0..<ticks {
                 try? await Task.sleep(nanoseconds: 350_000_000)

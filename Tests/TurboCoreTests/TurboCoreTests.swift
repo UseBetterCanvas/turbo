@@ -256,6 +256,11 @@ final class ApprovalTests: XCTestCase {
         XCTAssertEqual(ask.sessionID, "s1")
         XCTAssertEqual(ask.tool, "Bash")
         XCTAssertEqual(ask.detail, "npm test npm run lint")
+        XCTAssertTrue(ask.isComplete)
+        let long = #"{"session_id":"s1","tool_name":"Bash","tool_input":{"command":"echo "# + String(repeating: "x", count: 200) + #" && rm -rf build"}}"#
+        let longAsk = try XCTUnwrap(EventParser.parsePermissionRequest(Data(long.utf8)))
+        XCTAssertFalse(longAsk.isComplete)
+        XCTAssertEqual(longAsk.detail?.count, 100)
         let edit = #"{"session_id":"s1","tool_name":"Edit","tool_input":{"file_path":"/w/app/Sources/Store.swift"}}"#
         XCTAssertEqual(EventParser.parsePermissionRequest(Data(edit.utf8))?.detail, "Store.swift")
         XCTAssertNil(EventParser.parsePermissionRequest(Data("{}".utf8)))
@@ -468,5 +473,34 @@ final class TailerAndFormatTests: XCTestCase {
         XCTAssertEqual(Format.snippet(text), "Done")
         XCTAssertEqual(Format.duration(75), "1m 15s")
         XCTAssertEqual(Format.clock(3700), "1:01:40")
+    }
+}
+
+final class SessionNamingTests: XCTestCase {
+    func testTitleFromPrompt() {
+        XCTAssertEqual(SessionNaming.title(fromPrompt: "can you build the note style picker for the LMS please?"), "Build the note style picker for…")
+        XCTAssertEqual(SessionNaming.title(fromPrompt: "fix login bug"), "Fix login bug")
+        XCTAssertNil(SessionNaming.title(fromPrompt: "<environment_context>cwd</environment_context>"))
+        XCTAssertNil(SessionNaming.title(fromPrompt: "   "))
+    }
+
+    func testOpaqueFoldersAreHidden() {
+        XCTAssertNil(SessionNaming.repoName(fromPath: "/Users/j/.codex/.chatgpt-projects/g-p-6781bfff18808191a31dfc769598c765"))
+        XCTAssertEqual(SessionNaming.repoName(fromPath: "/w/waffle-web"), "waffle-web")
+    }
+
+    func testSessionNamedByFirstPrompt() {
+        let store = SessionStore()
+        let now = Date()
+        _ = store.apply(AgentEvent(agent: .claude, sessionID: "a", cwd: "/w/web", kind: .promptSubmitted, prompt: "Add dark mode to settings", date: now))
+        _ = store.apply(AgentEvent(agent: .claude, sessionID: "a", kind: .promptSubmitted, prompt: "now run the tests", date: now))
+        let s = store.sorted.first
+        XCTAssertEqual(s?.projectName, "Add dark mode to settings")
+        XCTAssertEqual(s?.place, "web")
+    }
+
+    func testCodexUserMessageNamesSession() {
+        let line = #"{"type":"event_msg","payload":{"type":"user_message","message":"Refactor the billing module"}}"#
+        XCTAssertEqual(EventParser.parseCodexRolloutLine(Data(line.utf8)), .prompt("Refactor the billing module"))
     }
 }
