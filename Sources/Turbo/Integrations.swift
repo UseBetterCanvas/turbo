@@ -14,7 +14,7 @@ enum Integrations {
         case conflict(existing: String)
     }
 
-    static let installCommand = #"gh api repos/UseBetterCanvas/turbo/contents/scripts/install.sh -H "Accept: application/vnd.github.raw" > /tmp/turbo-install.sh && bash /tmp/turbo-install.sh"#
+    static let installCommand = #"bash <(gh api repos/UseBetterCanvas/turbo/contents/scripts/install.sh -H "Accept: application/vnd.github.raw")"#
 
     /// Codex has been used on this Mac.
     static var isCodexPresent: Bool {
@@ -25,6 +25,11 @@ enum Integrations {
     static var isCoworkPresent: Bool {
         FileManager.default.fileExists(atPath: CoworkSessionSource.defaultRoot.path)
             || NSWorkspace.shared.urlForApplication(withBundleIdentifier: CoworkSessionSource.desktopBundleID) != nil
+    }
+
+    /// The PermissionRequest hook that lets you Allow / Deny from Turbo.
+    static var isClaudeApprovalInstalled: Bool {
+        HookInstaller.isClaudeApprovalInstalled(try? Data(contentsOf: claudeSettingsURL))
     }
 
     static var isClaudeInstalled: Bool {

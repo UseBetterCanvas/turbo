@@ -18,6 +18,9 @@ final class Updater: ObservableObject {
         /// Turbo can't replace itself where it's installed (e.g. an admin-owned folder);
         /// the install command can, since it asks for a password.
         case manualInstall(String)
+        /// macOS is running a quarantined copy from a temporary read-only spot
+        /// ("App Translocation"). Clearing the quarantine flag and reopening fixes it.
+        case translocated
         case failed(String)
     }
 
@@ -86,12 +89,16 @@ final class Updater: ObservableObject {
         guard case let .available(info) = state else { return }
         installError = nil
         let target = Bundle.main.bundleURL
+        if Self.isTranslocated {
+            state = .translocated
+            return
+        }
         guard target.pathExtension == "app" else {
             fail("Run Turbo from your Applications folder to update it.")
             return
         }
         guard FileManager.default.isWritableFile(atPath: target.deletingLastPathComponent().path) else {
-            state = .manualInstall("Turbo can't replace itself in \(target.deletingLastPathComponent().path). Paste the install command in Terminal; it asks for your password.")
+            state = .manualInstall("Turbo can't replace itself in \(target.deletingLastPathComponent().path). Paste the install command in Terminal. It asks for your password.")
             return
         }
 
@@ -121,6 +128,39 @@ final class Updater: ObservableObject {
         installError = nil
         await check()
         await install()
+    }
+
+    /// True when macOS is running Turbo from its temporary App Translocation copy.
+    static var isTranslocated: Bool {
+        Bundle.main.bundlePath.contains("/AppTranslocation/")
+    }
+
+    /// Where the real copy most likely lives.
+    static var installedAppURL: URL {
+        URL(fileURLWithPath: "/Applications/Turbo.app")
+    }
+
+    /// Clears the quarantine flag on the installed copy and reopens it from there, so updates
+    /// can replace it. Falls back to the install command if Turbo isn't in Applications.
+    func fixTranslocation() {
+        let app = Self.installedAppURL
+        guard FileManager.default.fileExists(atPath: app.path) else {
+            state = .manualInstall("Move Turbo into your Applications folder, then reopen it. Or paste the install command in Terminal.")
+            return
+        }
+        do {
+            try run("/usr/bin/xattr", ["-dr", "com.apple.quarantine", app.path])
+        } catch {
+            state = .manualInstall("Couldn't clear macOS's download flag on Turbo. Paste the install command in Terminal to reinstall it.")
+            return
+        }
+        // Reopen from Applications once this copy has quit.
+        let pid = ProcessInfo.processInfo.processIdentifier
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/sh")
+        process.arguments = ["-c", "while kill -0 \(pid) 2>/dev/null; do sleep 0.2; done; /usr/bin/open -n \(CodexCloudPoller.shellQuote(app.path))"]
+        try? process.run()
+        NSApp.terminate(nil)
     }
 
     private func fail(_ message: String) {

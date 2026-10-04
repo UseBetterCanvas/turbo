@@ -249,6 +249,55 @@ final class UpdateInfoTests: XCTestCase {
     }
 }
 
+final class ApprovalTests: XCTestCase {
+    func testParsePermissionRequest() throws {
+        let bash = #"{"hook_event_name":"PermissionRequest","session_id":"s1","cwd":"/w/app","tool_name":"Bash","tool_input":{"command":"npm test\nnpm run lint"}}"#
+        let ask = try XCTUnwrap(EventParser.parsePermissionRequest(Data(bash.utf8)))
+        XCTAssertEqual(ask.sessionID, "s1")
+        XCTAssertEqual(ask.tool, "Bash")
+        XCTAssertEqual(ask.detail, "npm test npm run lint")
+        XCTAssertTrue(ask.isComplete)
+        let long = #"{"session_id":"s1","tool_name":"Bash","tool_input":{"command":"echo "# + String(repeating: "x", count: 200) + #" && rm -rf build"}}"#
+        let longAsk = try XCTUnwrap(EventParser.parsePermissionRequest(Data(long.utf8)))
+        XCTAssertFalse(longAsk.isComplete)
+        XCTAssertEqual(longAsk.detail?.count, 100)
+        let edit = #"{"session_id":"s1","tool_name":"Edit","tool_input":{"file_path":"/w/app/Sources/Store.swift"}}"#
+        XCTAssertEqual(EventParser.parsePermissionRequest(Data(edit.utf8))?.detail, "Store.swift")
+        XCTAssertNil(EventParser.parsePermissionRequest(Data("{}".utf8)))
+    }
+
+    func testDecisionJSON() throws {
+        let allow = try XCTUnwrap(EventParser.jsonObject(Data(EventParser.permissionDecision(allow: true).utf8)))
+        let out = try XCTUnwrap(allow["hookSpecificOutput"] as? [String: Any])
+        XCTAssertEqual(out["hookEventName"] as? String, "PermissionRequest")
+        XCTAssertEqual((out["decision"] as? [String: Any])?["behavior"] as? String, "allow")
+        XCTAssertTrue(EventParser.permissionDecision(allow: false).contains(#""behavior":"deny""#))
+    }
+
+    func testApprovalHookInstalled() throws {
+        let data = try HookInstaller.installClaude(into: nil)
+        XCTAssertTrue(HookInstaller.isClaudeApprovalInstalled(data))
+        let root = try XCTUnwrap(EventParser.jsonObject(data))
+        let group = try XCTUnwrap(((root["hooks"] as? [String: Any])?["PermissionRequest"] as? [[String: Any]])?.first)
+        let hook = try XCTUnwrap((group["hooks"] as? [[String: Any]])?.first)
+        XCTAssertEqual(hook["timeout"] as? Int, 90)
+        XCTAssertFalse((hook["command"] as? String ?? "").contains(" >/dev/null"), "the answer must reach stdout (only stderr is silenced)")
+        let removed = try HookInstaller.uninstallClaude(from: data)
+        XCTAssertFalse(HookInstaller.isClaudeApprovalInstalled(removed))
+    }
+
+    func testStepsAndPrompt() {
+        let store = SessionStore()
+        store.apply(AgentEvent(agent: .claude, sessionID: "a", kind: .promptSubmitted, prompt: "  Fix the login bug  "))
+        for tool in ["Read", "Read", "Edit", "Edit", "Bash"] {
+            store.apply(AgentEvent(agent: .claude, sessionID: "a", kind: .activity(tool: tool)))
+        }
+        let s = store.sessions["claude:a"]
+        XCTAssertEqual(s?.lastPrompt, "Fix the login bug")
+        XCTAssertEqual(s?.recentSteps, ["Read", "Edit", "Bash"])
+    }
+}
+
 final class HTTPTests: XCTestCase {
     func testParseAndRoute() throws {
         let body = #"{"hook_event_name":"Stop","session_id":"z"}"#
@@ -424,5 +473,34 @@ final class TailerAndFormatTests: XCTestCase {
         XCTAssertEqual(Format.snippet(text), "Done")
         XCTAssertEqual(Format.duration(75), "1m 15s")
         XCTAssertEqual(Format.clock(3700), "1:01:40")
+    }
+}
+
+final class SessionNamingTests: XCTestCase {
+    func testTitleFromPrompt() {
+        XCTAssertEqual(SessionNaming.title(fromPrompt: "can you build the note style picker for the LMS please?"), "Build the note style picker for…")
+        XCTAssertEqual(SessionNaming.title(fromPrompt: "fix login bug"), "Fix login bug")
+        XCTAssertNil(SessionNaming.title(fromPrompt: "<environment_context>cwd</environment_context>"))
+        XCTAssertNil(SessionNaming.title(fromPrompt: "   "))
+    }
+
+    func testOpaqueFoldersAreHidden() {
+        XCTAssertNil(SessionNaming.repoName(fromPath: "/Users/j/.codex/.chatgpt-projects/g-p-6781bfff18808191a31dfc769598c765"))
+        XCTAssertEqual(SessionNaming.repoName(fromPath: "/w/waffle-web"), "waffle-web")
+    }
+
+    func testSessionNamedByFirstPrompt() {
+        let store = SessionStore()
+        let now = Date()
+        _ = store.apply(AgentEvent(agent: .claude, sessionID: "a", cwd: "/w/web", kind: .promptSubmitted, prompt: "Add dark mode to settings", date: now))
+        _ = store.apply(AgentEvent(agent: .claude, sessionID: "a", kind: .promptSubmitted, prompt: "now run the tests", date: now))
+        let s = store.sorted.first
+        XCTAssertEqual(s?.projectName, "Add dark mode to settings")
+        XCTAssertEqual(s?.place, "web")
+    }
+
+    func testCodexUserMessageNamesSession() {
+        let line = #"{"type":"event_msg","payload":{"type":"user_message","message":"Refactor the billing module"}}"#
+        XCTAssertEqual(EventParser.parseCodexRolloutLine(Data(line.utf8)), .prompt("Refactor the billing module"))
     }
 }

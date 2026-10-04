@@ -139,7 +139,12 @@ struct SessionRowView: View {
                 .foregroundStyle(DS.Palette.textTertiary)
                 .help("Dismiss")
             }
-            if canOpen {
+            if model.pendingApproval(for: session) != nil {
+                Button("Deny") { model.decide(session, allow: false) }
+                    .buttonStyle(BCButtonStyle(variant: .secondary, size: .sm))
+                Button("Allow") { model.decide(session, allow: true) }
+                    .buttonStyle(BCButtonStyle(variant: .primary, size: .sm))
+            } else if canOpen {
                 Button(isWaiting ? "Respond" : "Open") { model.open(session) }
                     .buttonStyle(BCButtonStyle(variant: isWaiting ? .primary : .secondary, size: .sm))
             }
@@ -175,9 +180,9 @@ struct SessionRowView: View {
         }
     }
 
-    /// "Claude Code · Running a command · 4:12", "Codex · cooked in 3m 12s · Fixed the bug"
+    /// "waffle-web · Running a command · 4:12", "api · Done in 3m 12s · Fixed the bug"
     private var detail: String {
-        var parts = [session.agent.displayName]
+        var parts = [session.place ?? session.agent.displayName]
         switch session.phase {
         case let .needsInput(message):
             parts.append(message ?? "Waiting on a permission prompt")
@@ -186,7 +191,7 @@ struct SessionRowView: View {
             if let start = session.turnStartedAt { parts.append(Format.clock(now.timeIntervalSince(start))) }
         case .done:
             if session.failed { parts.append("Failed") }
-            if let duration = session.cookDuration { parts.append("\(session.failed ? "ran for" : "cooked in") \(Format.duration(duration))") }
+            if let duration = session.cookDuration { parts.append("\(session.failed ? "Ran for" : "Done in") \(Format.duration(duration))") }
             if let summary = Format.snippet(session.summary, limit: 80) { parts.append(summary) }
         case .idle:
             parts.append("Idle")
@@ -200,7 +205,23 @@ private struct UpdateBanner: View {
     @ObservedObject var updater: Updater
 
     var body: some View {
-        if case let .manualInstall(message) = updater.state {
+        if case .translocated = updater.state {
+            HStack(spacing: DS.Space.m) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(DS.Palette.gold)
+                Text("macOS is running Turbo from a temporary copy, so it can't update. Fix it once.")
+                    .font(DS.Typography.caption)
+                    .foregroundStyle(DS.Palette.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer()
+                Button("Fix and Relaunch") { updater.fixTranslocation() }
+                    .buttonStyle(PrimaryButtonStyle())
+            }
+            .padding(.horizontal, DS.Space.l)
+            .padding(.vertical, DS.Space.s)
+            .background(RoundedRectangle(cornerRadius: DS.Radius.l, style: .continuous).fill(DS.Palette.card))
+        } else if case let .manualInstall(message) = updater.state {
             HStack(spacing: DS.Space.m) {
                 Image(systemName: "lock.fill")
                     .font(.system(size: 13, weight: .semibold))

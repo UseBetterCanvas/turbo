@@ -130,55 +130,84 @@ private struct KeyHint: View {
 }
 
 /// Bottom-left "now playing" card, in the spirit of iTunes' track info.
+/// Bottom-left "now playing" card, like iTunes' track info, but for every session: what it is,
+/// what it's doing right now, and (for sessions on this Mac) what was asked.
 private struct NowCookingCard: View {
     let sessions: [AgentSession]
 
     var body: some View {
         let active = sessions.filter { $0.phase.isActive }
         TimelineView(.periodic(from: .now, by: 1)) { context in
-            VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .leading, spacing: 8) {
                 if let lead = active.first {
                     Text(isWaiting(lead) ? "WAITING ON YOU" : "NOW COOKING")
-                        .font(.system(size: 10, weight: .bold))
+                        .font(DSFont.sans(10.5, .heavy))
                         .tracking(2)
                         .foregroundStyle(isWaiting(lead) ? DS.Palette.gold : lead.agent.tint)
                     Text(lead.projectName)
-                        .font(.system(size: 26, weight: .bold, design: .rounded))
+                        .font(DSFont.display(30))
                         .foregroundStyle(.white)
-                    Text(details(lead, now: context.date))
-                        .font(.system(size: 12, weight: .medium).monospacedDigit())
-                        .foregroundStyle(.white.opacity(0.6))
+                        .lineLimit(1)
+                    Text(lead.statusText(now: context.date))
+                        .font(DSFont.sans(14, .semibold).monospacedDigit())
+                        .foregroundStyle(.white.opacity(0.85))
+                        .lineLimit(1)
+                    if let prompt = lead.lastPrompt {
+                        Text("“\(Format.snippet(prompt, limit: 110) ?? prompt)”")
+                            .font(DSFont.sans(12.5, .medium))
+                            .foregroundStyle(.white.opacity(0.6))
+                            .lineLimit(2)
+                            .frame(maxWidth: 460, alignment: .leading)
+                    }
+                    if !lead.recentSteps.isEmpty {
+                        HStack(spacing: 5) {
+                            ForEach(Array(lead.recentSteps.suffix(6).enumerated()), id: \.offset) { index, tool in
+                                Text(stepLabel(tool))
+                                    .font(DSFont.sans(10.5, .bold))
+                                    .foregroundStyle(.white.opacity(index == lead.recentSteps.suffix(6).count - 1 ? 0.95 : 0.55))
+                                    .padding(.horizontal, 7)
+                                    .padding(.vertical, 3)
+                                    .background(Capsule().fill(Color.white.opacity(index == lead.recentSteps.suffix(6).count - 1 ? 0.18 : 0.08)))
+                            }
+                        }
+                    }
+                    // Everything else on the stove, one line each.
                     if active.count > 1 {
-                        Text("+ \(active.count - 1) more on the stove")
-                            .font(.system(size: 11, weight: .medium))
-                            .foregroundStyle(.white.opacity(0.45))
+                        VStack(alignment: .leading, spacing: 4) {
+                            ForEach(active.dropFirst().prefix(4)) { session in
+                                HStack(spacing: 6) {
+                                    Circle().fill(isWaiting(session) ? DS.Palette.gold : session.agent.tint).frame(width: 6, height: 6)
+                                    Text(session.projectName).font(DSFont.sans(12, .bold)).foregroundStyle(.white.opacity(0.85))
+                                    Text(session.statusText(now: context.date))
+                                        .font(DSFont.sans(12, .medium).monospacedDigit())
+                                        .foregroundStyle(.white.opacity(0.5))
+                                        .lineLimit(1)
+                                }
+                            }
+                            if active.count > 5 {
+                                Text("+ \(active.count - 5) more").font(DSFont.sans(11, .medium)).foregroundStyle(.white.opacity(0.4))
+                            }
+                        }
+                        .padding(.top, 4)
                     }
                 } else {
                     Text("NOTHING ON THE STOVE")
-                        .font(.system(size: 10, weight: .bold))
+                        .font(DSFont.sans(10.5, .heavy))
                         .tracking(2)
                         .foregroundStyle(.white.opacity(0.5))
-                    Text("Send a prompt to Claude Code or Codex")
-                        .font(.system(size: 14, weight: .medium))
+                    Text("Start a session in Claude Code, Codex or Cowork")
+                        .font(DSFont.sans(14, .medium))
                         .foregroundStyle(.white.opacity(0.7))
                 }
             }
-            .padding(18)
-            .background(RoundedRectangle(cornerRadius: 16).fill(.black.opacity(0.35)))
+            .padding(20)
+            .background(RoundedRectangle(cornerRadius: 18).fill(.black.opacity(0.4)))
         }
     }
 
     private func isWaiting(_ session: AgentSession) -> Bool {
         if case .needsInput = session.phase { return true }
         return false
-    }
-
-    private func details(_ session: AgentSession, now: Date) -> String {
-        var parts = [session.agent.displayName]
-        if let start = session.turnStartedAt { parts.append(Format.clock(now.timeIntervalSince(start))) }
-        if session.beats > 0 { parts.append("\(session.beats) step\(session.beats == 1 ? "" : "s")") }
-        if let tool = session.lastTool { parts.append(tool) }
-        return parts.joined(separator: " · ")
     }
 }
 

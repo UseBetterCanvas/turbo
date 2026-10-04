@@ -80,7 +80,7 @@ extension AgentSession {
             let when = ago < 60 ? "just now" : Format.duration(ago) + " ago"
             if failed { return "Failed \(when)" }
             if let summary = Format.snippet(summary, limit: 70) { return "Done \(when) · \(summary)" }
-            if let cooked = cookDuration { return "Cooked in \(Format.duration(cooked)) · \(when)" }
+            if let cooked = cookDuration { return "Done in \(Format.duration(cooked)) · \(when)" }
             return "Done \(when)"
         case .idle:
             return "Idle"
@@ -100,6 +100,19 @@ extension AgentSession {
         if has(["mcp"]) { return "Using a connected tool" }
         return "Working"
     }
+}
+
+/// A short label for one step, for the step chips: "Ran a command" → "Command".
+func stepLabel(_ tool: String) -> String {
+    let t = tool.lowercased()
+    func has(_ words: [String]) -> Bool { words.contains { t.contains($0) } }
+    if has(["bash", "shell", "exec", "command", "terminal"]) { return "Command" }
+    if has(["edit", "write", "patch", "notebook"]) { return "Edit" }
+    if has(["read", "grep", "glob", "ls"]) { return "Read" }
+    if has(["web", "fetch", "search"]) { return "Web" }
+    if has(["task", "agent"]) { return "Helper" }
+    if has(["todo", "plan"]) { return "Plan" }
+    return tool.count > 12 ? String(tool.prefix(11)) + "…" : tool
 }
 
 /// One line for the top of the hover list: what's going on across every session.

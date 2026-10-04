@@ -50,6 +50,8 @@ public struct AgentEvent: Equatable, Sendable {
     public var title: String?
     /// Where clicking the session should take you (a cloud session's page).
     public var link: URL?
+    /// What the user asked (local sessions only; cloud pings never include it).
+    public var prompt: String?
     public var date: Date
 
     public init(
@@ -61,6 +63,7 @@ public struct AgentEvent: Equatable, Sendable {
         hostAppBundleID: String? = nil,
         title: String? = nil,
         link: URL? = nil,
+        prompt: String? = nil,
         date: Date = Date()
     ) {
         self.agent = agent
@@ -71,6 +74,7 @@ public struct AgentEvent: Equatable, Sendable {
         self.hostAppBundleID = hostAppBundleID
         self.title = title
         self.link = link
+        self.prompt = prompt
         self.date = date
     }
 }
@@ -112,8 +116,45 @@ public enum EventParser {
             cwd: obj["cwd"] as? String,
             kind: kind,
             transcriptPath: obj["transcript_path"] as? String,
+            prompt: obj["prompt"] as? String,
             date: now
         )
+    }
+
+    /// A Claude Code permission prompt, from the `PermissionRequest` hook.
+    public struct PermissionAsk: Equatable, Sendable {
+        public var sessionID: String
+        public var cwd: String?
+        public var tool: String
+        /// What it wants to do, in one line: the command, the file, or the URL.
+        public var detail: String?
+        /// False when the detail had to be shortened. Turbo then leaves the prompt to the
+        /// terminal, so nobody allows a command they couldn't read in full.
+        public var isComplete: Bool = true
+    }
+
+    public static func parsePermissionRequest(_ data: Data) -> PermissionAsk? {
+        guard let obj = jsonObject(data), let tool = obj["tool_name"] as? String else { return nil }
+        let input = obj["tool_input"] as? [String: Any] ?? [:]
+        let raw = (input["command"] as? String)
+            ?? (input["file_path"] as? String).map { URL(fileURLWithPath: $0).lastPathComponent }
+            ?? (input["url"] as? String)
+            ?? (input["pattern"] as? String)
+            ?? (input["description"] as? String)
+        let full = raw.map { $0.replacingOccurrences(of: "\n", with: " ").trimmingCharacters(in: .whitespaces) }
+        let limit = 100
+        let detail = full.map { $0.count > limit ? String($0.prefix(limit - 1)) + "…" : $0 }
+        return PermissionAsk(
+            sessionID: (obj["session_id"] as? String) ?? "claude", cwd: obj["cwd"] as? String, tool: tool, detail: detail,
+            isComplete: (full?.count ?? 0) <= limit
+        )
+    }
+
+    /// The JSON a PermissionRequest hook prints to allow or deny.
+    public static func permissionDecision(allow: Bool) -> String {
+        allow
+            ? #"{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow"}}}"#
+            : #"{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"deny","message":"Denied from Turbo"}}}"#
     }
 
     /// Parses the JSON Codex passes as the last argv element to its `notify` program.
@@ -132,6 +173,8 @@ public enum EventParser {
     public enum RolloutLine: Equatable {
         case meta(id: String?, cwd: String?)
         case event(AgentEventKind)
+        /// Something the person typed. Starts a turn and can name the session.
+        case prompt(String?)
     }
 
     /// Parses one line of a Codex rollout file (~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl).
@@ -150,8 +193,10 @@ public enum EventParser {
             return nil
         case "event_msg":
             switch payload["type"] as? String {
-            case "task_started", "user_message":
+            case "task_started":
                 return .event(.promptSubmitted)
+            case "user_message":
+                return .prompt(payload["message"] as? String)
             case "task_complete":
                 return .event(.turnComplete(summary: payload["last_agent_message"] as? String))
             case "exec_command_begin", "mcp_tool_call_begin", "patch_apply_begin", "web_search_begin":

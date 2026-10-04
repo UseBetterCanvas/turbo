@@ -32,6 +32,12 @@ public struct AgentSession: Identifiable, Equatable, Sendable {
     public var link: URL?
     /// The last turn ended in an error or was cancelled (shown as failed, not done).
     public var failed = false
+    /// What was asked to start this turn (local sessions only).
+    public var lastPrompt: String?
+    /// A short name from the first thing this session was asked. Kept across turns.
+    public var threadName: String?
+    /// The latest steps this turn, newest last (tool names).
+    public var recentSteps: [String] = []
 
     public init(agent: Agent, sessionID: String, cwd: String? = nil, lastActivityAt: Date) {
         self.agent = agent
@@ -40,11 +46,19 @@ public struct AgentSession: Identifiable, Equatable, Sendable {
         self.lastActivityAt = lastActivityAt
     }
 
+    /// What to call this session: its title, a name from its first prompt, or its repo.
     public var projectName: String {
         if let title, !title.isEmpty { return title }
-        guard let cwd, !cwd.isEmpty else { return agent.displayName }
-        let name = URL(fileURLWithPath: cwd).lastPathComponent
-        return name.isEmpty || name == "/" ? cwd : name
+        return threadName ?? repoName ?? agent.displayName
+    }
+
+    /// The folder it runs in, unless that's an opaque id.
+    public var repoName: String? { SessionNaming.repoName(fromPath: cwd) }
+
+    /// The repo, when the name doesn't already say it. Shown next to the status.
+    public var place: String? {
+        guard let repo = repoName, repo != projectName else { return nil }
+        return repo
     }
 
     public var summary: String? {
@@ -116,10 +130,19 @@ public final class SessionStore {
                 startTurn(&s, at: now)
                 changes.append(.started(s))
             }
+            if let prompt = event.prompt?.trimmingCharacters(in: .whitespacesAndNewlines), !prompt.isEmpty {
+                s.lastPrompt = prompt
+                if s.threadName == nil { s.threadName = SessionNaming.title(fromPrompt: prompt) }
+            }
 
         case let .activity(tool):
             s.lastActivityAt = now
-            if let tool { s.lastTool = tool }
+            if let tool {
+                s.lastTool = tool
+                // Pre and Post hooks both report a tool; keep one entry per step.
+                if s.recentSteps.last != tool || s.phase != .cooking { s.recentSteps.append(tool) }
+                if s.recentSteps.count > 6 { s.recentSteps.removeFirst(s.recentSteps.count - 6) }
+            }
             switch s.phase {
             case .cooking:
                 s.beats += 1
@@ -211,6 +234,8 @@ public final class SessionStore {
         s.beats = 0
         s.lastTool = nil
         s.failed = false
+        s.recentSteps = []
+        s.lastPrompt = nil
     }
 
     private func resolveKey(for event: AgentEvent) -> String {

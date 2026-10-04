@@ -87,7 +87,7 @@ jobs:
           **Install or update** (needs the GitHub CLI):
 
           ```sh
-          gh api repos/__REPO__/contents/scripts/install.sh -H "Accept: application/vnd.github.raw" > /tmp/turbo-install.sh && bash /tmp/turbo-install.sh
+          bash <(gh api repos/__REPO__/contents/scripts/install.sh -H "Accept: application/vnd.github.raw")
           ```
 
           __OPEN_NOTE__
