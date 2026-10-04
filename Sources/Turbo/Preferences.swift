@@ -136,12 +136,9 @@ final class Preferences: ObservableObject {
         watchCoworkSessions = defaults.bool(forKey: Key.watchCowork)
         islandPlacement = IslandPlacement(rawValue: defaults.string(forKey: Key.islandPlacement) ?? "") ?? .automatic
         cloudEnabled = defaults.bool(forKey: Key.cloudEnabled)
-        if let channel = defaults.string(forKey: Key.cloudChannel), !channel.isEmpty {
-            cloudChannel = channel
-        } else {
-            cloudChannel = CloudRelay.newChannel()
-            defaults.set(cloudChannel, forKey: Key.cloudChannel)
-        }
+        let channel = defaults.string(forKey: Key.cloudChannel).flatMap { $0.isEmpty ? nil : $0 } ?? CloudRelay.newChannel()
+        defaults.set(channel, forKey: Key.cloudChannel)
+        cloudChannel = channel
         visualizerAutoOpen = defaults.bool(forKey: Key.visualizerAutoOpen)
         visualizerFullScreen = defaults.bool(forKey: Key.visualizerFullScreen)
         visualizerAutoClose = defaults.bool(forKey: Key.visualizerAutoClose)
