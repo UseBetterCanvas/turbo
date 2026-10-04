@@ -565,6 +565,9 @@ struct UpdateRow: View {
             case .manualInstall:
                 Button("Copy Install Command") { copy(Integrations.installCommand) }
                     .buttonStyle(PrimaryButtonStyle())
+            case .translocated:
+                Button("Fix and Relaunch") { updater.fixTranslocation() }
+                    .buttonStyle(PrimaryButtonStyle())
             default:
                 Button("Check Now") { Task { await updater.check() } }
                     .buttonStyle(SecondaryButtonStyle())
@@ -582,6 +585,7 @@ struct UpdateRow: View {
         case .installing: return "Installing. Turbo will reopen in a moment."
         case .needsAccess: return "Turbo's repo is private. Sign in to GitHub in Terminal once, then check again."
         case let .manualInstall(message): return message
+        case .translocated: return "macOS is running Turbo from a temporary copy, so it can't update itself. Fix it once and Turbo reopens from Applications."
         case let .failed(message): return message
         }
     }

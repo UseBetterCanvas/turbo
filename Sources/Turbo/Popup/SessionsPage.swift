@@ -205,7 +205,23 @@ private struct UpdateBanner: View {
     @ObservedObject var updater: Updater
 
     var body: some View {
-        if case let .manualInstall(message) = updater.state {
+        if case .translocated = updater.state {
+            HStack(spacing: DS.Space.m) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(DS.Palette.gold)
+                Text("macOS is running Turbo from a temporary copy, so it can't update. Fix it once.")
+                    .font(DS.Typography.caption)
+                    .foregroundStyle(DS.Palette.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer()
+                Button("Fix and Relaunch") { updater.fixTranslocation() }
+                    .buttonStyle(PrimaryButtonStyle())
+            }
+            .padding(.horizontal, DS.Space.l)
+            .padding(.vertical, DS.Space.s)
+            .background(RoundedRectangle(cornerRadius: DS.Radius.l, style: .continuous).fill(DS.Palette.card))
+        } else if case let .manualInstall(message) = updater.state {
             HStack(spacing: DS.Space.m) {
                 Image(systemName: "lock.fill")
                     .font(.system(size: 13, weight: .semibold))

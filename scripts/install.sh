@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Installs (or updates) Turbo into /Applications and launches it.
 #
-#   gh api repos/UseBetterCanvas/turbo/contents/scripts/install.sh -H "Accept: application/vnd.github.raw" > /tmp/turbo-install.sh && bash /tmp/turbo-install.sh
+#   bash <(gh api repos/UseBetterCanvas/turbo/contents/scripts/install.sh -H "Accept: application/vnd.github.raw")
 #
 # The repo is private, so this uses the GitHub CLI (https://cli.github.com) to download.
 # Downloading from the command line also skips macOS's "Apple could not verify" prompt,
@@ -25,8 +25,10 @@ if ! gh auth status --hostname github.com >/dev/null 2>&1; then
 fi
 
 echo "Downloading Turbo…"
-ASSET_ID="$(gh api "repos/$REPO/releases/tags/latest-build" --jq '.assets[] | select(.name == "Turbo.zip") | .id')"
-gh api "repos/$REPO/releases/assets/$ASSET_ID" -H "Accept: application/octet-stream" > "$TMP/Turbo.zip"
+if ! gh release download latest-build --repo "$REPO" --pattern Turbo.zip --dir "$TMP" --clobber; then
+  echo "Couldn't download Turbo. Check that your GitHub account can see $REPO (gh auth status)."
+  exit 1
+fi
 ditto -x -k "$TMP/Turbo.zip" "$TMP"
 
 # Quit a running copy so it can be replaced.
