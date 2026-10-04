@@ -475,15 +475,33 @@ private struct SessionList: View {
             }
 
             // Chips on the left, and the way into the full pop-up on the right.
-            HStack(spacing: 8) {
+            ListFooter(updater: model.updater, sessionCount: sessions.count)
+                .staggered(min(sessions.count, IslandLayout.maxRows) + 1)
+        }
+        .padding(.horizontal, 12)
+    }
+}
+
+/// Chips on the left, the way into the pop-up on the right. When an update is waiting, the
+/// Visualizer chip shrinks to its icon and the session count steps aside to make room.
+private struct ListFooter: View {
+    @EnvironmentObject private var model: AppModel
+    @ObservedObject var updater: Updater
+    let sessionCount: Int
+
+    var body: some View {
+        let updating = UpdateChip.isShowing(updater)
+        HStack(spacing: 8) {
                 ConnectedAgentsChip()
+                UpdateChip(updater: updater)
                 ChipButton(action: { model.openVisualizer() }) {
                     Image(systemName: "sparkles").font(.system(size: 11, weight: .semibold))
-                    Text("Visualizer")
+                    if !updating { Text("Visualizer") }
                 }
-                Spacer()
-                if sessions.count > IslandLayout.maxRows {
-                    Text("\(sessions.count) sessions")
+                .help("Visualizer")
+                Spacer(minLength: 4)
+                if sessionCount > IslandLayout.maxRows && !updating {
+                    Text("\(sessionCount) sessions")
                         .font(DSFont.sans(11.5, .semibold))
                         .foregroundStyle(DS.Palette.textTertiary)
                 }
@@ -493,9 +511,6 @@ private struct SessionList: View {
             }
             .padding(.horizontal, 6)
             .frame(height: IslandLayout.listFooterHeight)
-            .staggered(min(sessions.count, IslandLayout.maxRows) + 1)
-        }
-        .padding(.horizontal, 12)
     }
 }
 

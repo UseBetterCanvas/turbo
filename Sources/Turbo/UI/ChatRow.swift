@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 import TurboCore
 
@@ -216,5 +217,86 @@ struct ConnectedAgentsChip: View {
         if prefs.watchCodexCloud && model.lastHeard[.codexCloud] != nil { list.append(.codexCloud) }
         if prefs.watchCoworkSessions && model.lastHeard[.cowork] != nil { list.append(.cowork) }
         return list
+    }
+}
+
+/// A Blurple "Update" pill that appears in the island when a new version is ready, so it's
+/// one click from anywhere. Also covers the one-time "Fix and Relaunch".
+struct UpdateChip: View {
+    @ObservedObject var updater: Updater
+    @State private var hovering = false
+
+    var body: some View {
+        if let item = content {
+            Button(action: item.action) {
+                HStack(spacing: 5) {
+                    if busy {
+                        ProgressView().controlSize(.mini).tint(.white)
+                    } else {
+                        Image(systemName: item.symbol).font(.system(size: 11, weight: .bold))
+                    }
+                    Text(item.title)
+                }
+                .font(DSFont.sans(12, .bold))
+                .foregroundStyle(.white)
+                .padding(.horizontal, 11)
+                .frame(height: 28)
+                .background(Capsule().fill(DS.Palette.brand.opacity(hovering ? 1 : 0.9)))
+                .contentShape(Capsule())
+            }
+            .buttonStyle(PressableStyle())
+            .disabled(busy)
+            .onHover { hovering = $0 }
+            .help(help)
+            .transition(.scale(scale: 0.9).combined(with: .opacity))
+        }
+    }
+
+    private var busy: Bool {
+        switch updater.state {
+        case .downloading, .installing: return true
+        default: return false
+        }
+    }
+
+    private var help: String {
+        if case .translocated = updater.state { return "macOS is running a temporary copy. Fix it once so updates can land." }
+        if case let .manualInstall(message) = updater.state { return message + " The command is copied; paste it in Terminal." }
+        return "Install the new version. Turbo reopens in a moment."
+    }
+
+    /// Whether the chip is showing, so the footer can make room for it.
+    static func isShowing(_ updater: Updater) -> Bool {
+        switch updater.state {
+        case .available, .downloading, .installing, .translocated, .manualInstall: return true
+        default: return updater.installError != nil
+        }
+    }
+
+    private var content: (title: String, symbol: String, action: () -> Void)? {
+        switch updater.state {
+        case .available:
+            return ("Update", "arrow.down.circle.fill", { Task { await updater.install() } })
+        case .downloading:
+            return ("Downloading", "arrow.down.circle.fill", {})
+        case .installing:
+            return ("Installing", "arrow.down.circle.fill", {})
+        case .translocated:
+            return ("Fix & Relaunch", "wrench.and.screwdriver.fill", { updater.fixTranslocation() })
+        case .manualInstall:
+            // Turbo can't replace itself here: hand over the one-line install and open Terminal.
+            return ("Install in Terminal", "terminal.fill", {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(Integrations.installCommand, forType: .string)
+                if let terminal = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.Terminal") {
+                    NSWorkspace.shared.openApplication(at: terminal, configuration: NSWorkspace.OpenConfiguration())
+                }
+            })
+        default:
+            if updater.installError != nil {
+                return ("Retry Update", "arrow.clockwise", { Task { await updater.retryInstall() } })
+            }
+            return nil
+        }
     }
 }
