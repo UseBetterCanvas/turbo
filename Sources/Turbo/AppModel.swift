@@ -408,7 +408,7 @@ final class AppModel: ObservableObject {
     }
 
     func openSettings() {
-        openPopup(.agents)
+        openPopup(.settings)
     }
 
     func openVisualizer() {

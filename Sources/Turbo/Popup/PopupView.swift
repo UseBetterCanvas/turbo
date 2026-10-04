@@ -94,54 +94,53 @@ private struct PopupContent: View {
                 WelcomeFlow()
                     .transition(.opacity)
             } else {
-                HStack(spacing: 0) {
-                    PopupSidebar()
-                    Rectangle().fill(DS.Palette.divider).frame(width: 1)
-                    ScrollView {
-                        page
-                            .padding(.horizontal, DS.Space.xl)
-                            .padding(.vertical, DS.Space.l)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .id(model.popupPage)
-                            .transition(.opacity)
+                ScrollView {
+                    Group {
+                        if model.popupPage == .settings { SettingsPage() } else { SessionsPage() }
                     }
-                    .background(DS.Palette.base)
+                    .frame(maxWidth: 640)
+                    .frame(maxWidth: .infinity)
+                    .padding(.horizontal, DS.Space.xl)
+                    .padding(.top, DS.Space.m)
+                    .padding(.bottom, DS.Space.xl)
+                    .id(model.popupPage)
+                    .transition(.opacity)
                 }
+                .background(DS.Palette.base)
             }
         }
         .animation(DS.Motion.base, value: model.popupPage)
     }
 
-    /// Lives beside the notch: brand on the left, actions on the right.
+    /// Sits beside the notch: where you are on the left, actions on the right.
     private var header: some View {
-        let height = max(geometry.docked ? geometry.notchSize.height : 0, 30) + 10
+        let height = max(geometry.docked ? geometry.notchSize.height : 0, 30) + 12
+        let inSettings = model.popupPage == .settings
         return HStack(spacing: DS.Space.s) {
-            AppIconView(size: 20)
-            Text("Turbo")
-                .font(DSFont.sans(14, .heavy))
-                .foregroundStyle(DS.Palette.textPrimary)
-            Spacer()
-            if model.board.activeCount > 0 {
-                StatusPill(text: "\(model.board.activeCount) cooking", tone: .neutral)
+            if inSettings {
+                HeaderButton(symbol: "chevron.left", help: "Back to sessions") { model.popupPage = .home }
+                Text("Settings")
+                    .font(DSFont.sans(14, .heavy))
+                    .foregroundStyle(DS.Palette.textPrimary)
+            } else {
+                AppIconView(size: 20)
+                Text("Turbo")
+                    .font(DSFont.sans(14, .heavy))
+                    .foregroundStyle(DS.Palette.textPrimary)
             }
-            HeaderButton(symbol: "sparkles", help: "Open the visualizer") { model.openVisualizer() }
+            Spacer()
+            if model.popupPage != .welcome {
+                HeaderButton(symbol: "sparkles", help: "Visualizer") { model.openVisualizer() }
+                if !inSettings {
+                    HeaderButton(symbol: "gearshape", help: "Settings") { model.popupPage = .settings }
+                }
+            }
             HeaderButton(symbol: "xmark", help: "Close (esc)") { model.closePopup() }
         }
         .padding(.horizontal, DS.Space.l)
         .padding(.top, geometry.docked ? 4 : 8)
         .frame(height: height)
         .background(geometry.docked ? Color.black : DS.Palette.rail)
-    }
-
-    @ViewBuilder
-    private var page: some View {
-        switch model.popupPage {
-        case .welcome, .home: SessionsPage()
-        case .agents: AgentsPage()
-        case .island: IslandPage()
-        case .visualizer: VisualizerPage()
-        case .about: AboutPage()
-        }
     }
 }
 
@@ -156,96 +155,12 @@ private struct HeaderButton: View {
             Image(systemName: symbol)
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(hovering ? DS.Palette.textPrimary : DS.Palette.textSecondary)
-                .frame(width: 26, height: 26)
+                .frame(width: 28, height: 28)
                 .background(Circle().fill(hovering ? DS.Palette.hover : .clear))
                 .contentShape(Circle())
         }
         .buttonStyle(.plain)
         .help(help)
-        .onHover { hovering = $0 }
-        .animation(hovering ? nil : DS.Motion.out, value: hovering)
-    }
-}
-
-/// The BetterCampus settings rail: deep-4, filled rounded active row in brand-text.
-private struct PopupSidebar: View {
-    @EnvironmentObject private var model: AppModel
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            ForEach(PopupPage.navigation) { page in
-                SidebarItem(page: page, selected: model.popupPage == page, badge: badge(for: page)) {
-                    model.popupPage = page
-                }
-            }
-            Spacer()
-            sessionSummary
-        }
-        .padding(DS.Space.s)
-        .padding(.top, DS.Space.xs)
-        .frame(width: 168)
-        .background(DS.Palette.rail)
-    }
-
-    private func badge(for page: PopupPage) -> Int? {
-        page == .home && model.needsYouCount > 0 ? model.needsYouCount : nil
-    }
-
-    private var sessionSummary: some View {
-        let board = model.board
-        return VStack(alignment: .leading, spacing: 6) {
-            Eyebrow(text: "Right now")
-            summaryLine(color: DS.Palette.gold, count: board.needsYou.count, label: "need you")
-            summaryLine(color: DS.Palette.brandText, count: board.cooking.count, label: "cooking")
-            summaryLine(color: DS.Palette.ok, count: board.done.count, label: "done")
-        }
-        .padding(DS.Space.s)
-    }
-
-    private func summaryLine(color: Color, count: Int, label: String) -> some View {
-        HStack(spacing: 6) {
-            Circle().fill(count > 0 ? color : DS.Palette.border).frame(width: 6, height: 6)
-            Text("\(count) \(label)")
-                .font(DSFont.sans(12, .medium).monospacedDigit())
-                .foregroundStyle(count > 0 ? DS.Palette.textPrimary : DS.Palette.textTertiary)
-        }
-    }
-}
-
-private struct SidebarItem: View {
-    let page: PopupPage
-    let selected: Bool
-    var badge: Int?
-    let action: () -> Void
-    @State private var hovering = false
-
-    var body: some View {
-        Button(action: action) {
-            HStack(spacing: DS.Space.s) {
-                Image(systemName: page.symbol)
-                    .font(.system(size: 13, weight: .semibold))
-                    .frame(width: 18)
-                Text(page.title).font(DSFont.sans(13, .medium))
-                Spacer()
-                if let badge {
-                    Text("\(badge)")
-                        .font(DSFont.sans(10.5, .heavy).monospacedDigit())
-                        .foregroundStyle(Color.black)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 1)
-                        .background(Capsule().fill(DS.Palette.gold))
-                }
-            }
-            .foregroundStyle(selected ? DS.Palette.brandText : DS.Palette.textPrimary)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 7)
-            .background(
-                RoundedRectangle(cornerRadius: DS.Radius.m, style: .continuous)
-                    .fill(selected ? DS.Palette.brandText.opacity(0.18) : hovering ? DS.Palette.hover : .clear)
-            )
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
         .onHover { hovering = $0 }
         .animation(hovering ? nil : DS.Motion.out, value: hovering)
     }
