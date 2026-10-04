@@ -402,6 +402,9 @@ private struct SessionList: View {
                 IslandFooterButton(symbol: "sparkles", title: "Visualizer") {
                     model.openVisualizer()
                 }
+                IslandFooterButton(symbol: "gearshape", title: "Settings") {
+                    model.openPopup(.settings)
+                }
             }
             .frame(height: IslandLayout.listFooterHeight - 6)
             .padding(.top, 2)
@@ -448,6 +451,13 @@ private struct IdleIsland: View {
             Image(systemName: "pawprint.fill")
                 .font(.system(size: 11, weight: .semibold))
                 .foregroundStyle(Color.white.opacity(0.75))
+                // A teal dot: finished sessions you haven't looked at yet.
+                .overlay(alignment: .topTrailing) {
+                    if done > 0 {
+                        Circle().fill(DS.Palette.ok).frame(width: 5, height: 5).offset(x: 4, y: -3)
+                    }
+                }
+                .help(done > 0 ? "\(done) done" : "Turbo")
                 .frame(width: geometry.docked ? IslandLayout.idleSideWidth : 28)
             if geometry.docked && geometry.hasNotch {
                 Color.clear.frame(width: geometry.notchSize.width)
@@ -456,16 +466,18 @@ private struct IdleIsland: View {
             } else {
                 Color.clear.frame(width: geometry.notchSize.width)
             }
-            Group {
-                if done > 0 {
-                    // Finished sessions you haven't looked at yet.
-                    Circle().fill(DS.Palette.ok).frame(width: 6, height: 6)
-                        .help("\(done) done")
-                } else {
-                    Color.clear
-                }
+            // Settings, one click from the tiny island.
+            Button {
+                model.openPopup(.settings)
+            } label: {
+                Image(systemName: "gearshape.fill")
+                    .font(.system(size: 10.5, weight: .semibold))
+                    .foregroundStyle(Color.white.opacity(0.7))
+                    .frame(width: geometry.docked ? IslandLayout.idleSideWidth : 22, height: 22)
+                    .contentShape(Rectangle())
             }
-            .frame(width: geometry.docked ? IslandLayout.idleSideWidth : 10)
+            .buttonStyle(.plain)
+            .help("Settings")
         }
         .frame(height: geometry.docked ? geometry.notchSize.height : IslandLayout.floatingIdleSize.height)
     }

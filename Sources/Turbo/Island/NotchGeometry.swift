@@ -37,7 +37,7 @@ enum IslandLayout {
     static let canvasSize = CGSize(width: 680, height: 380)
     static let compactSideWidth: CGFloat = 76
     static let idleSideWidth: CGFloat = 34
-    static let floatingIdleSize = CGSize(width: 66, height: 30)
+    static let floatingIdleSize = CGSize(width: 86, height: 30)
     static let listFooterHeight: CGFloat = 40
     static let floatingCompactWidth: CGFloat = 248
     static let floatingCompactHeight: CGFloat = 38

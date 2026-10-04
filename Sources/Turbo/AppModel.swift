@@ -366,7 +366,7 @@ final class AppModel: ObservableObject {
     /// Takes you to the session: its cloud page, or the app it runs in.
     func open(_ session: AgentSession) {
         if let link = session.link {
-            NSWorkspace.shared.open(link)
+            openLink(link, for: session.agent)
             return
         }
         guard let bundleID = session.hostAppBundleID,
@@ -376,6 +376,37 @@ final class AppModel: ObservableObject {
         } else {
             app.activate(options: [.activateIgnoringOtherApps])
         }
+    }
+
+    static let claudeAppBundleID = "com.anthropic.claudefordesktop"
+    static let chatGPTAppBundleID = "com.openai.chat"
+
+    /// Whether the app for this kind of session is installed (for the settings hint).
+    static func appInstalled(for agent: Agent) -> Bool {
+        let id = agent == .codexCloud ? chatGPTAppBundleID : claudeAppBundleID
+        return NSWorkspace.shared.urlForApplication(withBundleIdentifier: id) != nil
+    }
+
+    /// Opens a session's page in the Claude/ChatGPT app or the browser, per the preference.
+    private func openLink(_ link: URL, for agent: Agent) {
+        if preferences.openSessionsIn == .app {
+            switch agent {
+            case .codexCloud:
+                if let app = NSWorkspace.shared.urlForApplication(withBundleIdentifier: Self.chatGPTAppBundleID) {
+                    NSWorkspace.shared.open([link], withApplicationAt: app, configuration: NSWorkspace.OpenConfiguration())
+                    return
+                }
+            default:
+                // The Claude app handles claude:// links to claude.ai pages.
+                var components = URLComponents(url: link, resolvingAgainstBaseURL: false)
+                components?.scheme = "claude"
+                if let deep = components?.url, NSWorkspace.shared.urlForApplication(toOpen: deep) != nil {
+                    NSWorkspace.shared.open(deep)
+                    return
+                }
+            }
+        }
+        NSWorkspace.shared.open(link)
     }
 
     func focusHost(of session: AgentSession) {
