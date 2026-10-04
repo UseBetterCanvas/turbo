@@ -75,7 +75,13 @@ struct ChatRow: View {
                         .font(DSFont.sans(compact ? 13 : 14, .bold))
                         .foregroundStyle(DS.Palette.textPrimary)
                         .lineLimit(1)
-                        .truncationMode(.middle)
+                        .truncationMode(.tail)
+                    if session.agent.isCloud {
+                        Image(systemName: "cloud.fill")
+                            .font(.system(size: compact ? 9 : 10, weight: .semibold))
+                            .foregroundStyle(DS.Palette.textTertiary)
+                            .help("Runs in the cloud")
+                    }
                     Spacer(minLength: 4)
                     Text(session.when(now: now))
                         .font(DSFont.sans(compact ? 11 : 12, .medium).monospacedDigit())

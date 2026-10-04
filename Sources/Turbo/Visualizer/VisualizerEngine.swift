@@ -19,6 +19,12 @@ final class VisualizerEngine {
     /// What's playing on the Mac, when the visualizer listens to music.
     var music: (() -> MusicLevels)?
     private var lastBeatSeen = 0
+    /// This frame's music, when listening: the spectrum folded into one level per color bucket.
+    private var musicFrame: MusicLevels?
+    private var bucketLevels = [Double](repeating: 0, count: VisualizerEngine.buckets)
+
+    /// How loud this color's slice of the spectrum is (0 when there's no music).
+    private func band(_ bucket: Int) -> Double { bucketLevels[bucket % Self.buckets] }
 
     private struct Particle {
         var p: CGPoint
@@ -173,6 +179,7 @@ final class VisualizerEngine {
         ctx.opacity = previousPreset == nil ? 1 : progress
         draw(preset, &ctx, frame)
         ctx.opacity = 1
+        if let levels = musicFrame { drawSpectrum(&ctx, frame, levels) }
         drawBursts(&ctx, frame)
     }
 
@@ -213,7 +220,19 @@ final class VisualizerEngine {
 
     private func step(_ dt: Double, aspect: CGFloat) {
         var base = isCooking ? 0.6 : 0.2
-        if let levels = music?() {
+        musicFrame = music?()
+        if let levels = musicFrame, levels.level > 0.005 {
+            // Each color bucket follows its own stretch of the spectrum, bass to treble.
+            let per = MusicLevels.bandCount / Self.buckets
+            for b in 0..<Self.buckets {
+                let slice = levels.bands[(b * per)..<min((b + 1) * per, levels.bands.count)]
+                bucketLevels[b] = slice.reduce(0, +) / Double(max(slice.count, 1))
+            }
+        } else {
+            musicFrame = nil
+            for b in bucketLevels.indices { bucketLevels[b] *= 0.9 }
+        }
+        if let levels = musicFrame {
             // The music sets the floor; agent steps still kick on top of it.
             base += levels.level * 1.4 + levels.bass * 0.8
             if levels.beats != lastBeatSeen {
@@ -280,8 +299,10 @@ final class VisualizerEngine {
             let dy = a.y - particle.p.y
             let dist = hypot(dx, dy) + 0.06
             // Pull toward the attractor plus a perpendicular swirl, which makes the orbits.
-            let ax = (dx / dist) * pull - (dy / dist) * 0.9
-            let ay = (dy / dist) * pull + (dx / dist) * 0.9
+            // With music on, each color swirls as hard as its part of the song.
+            let drive = 1 + band(particle.bucket) * 2.6
+            let ax = (dx / dist) * pull * drive - (dy / dist) * 0.9 * drive
+            let ay = (dy / dist) * pull * drive + (dx / dist) * 0.9 * drive
             particle.v.dx = (particle.v.dx + ax * dt) * damping
             particle.v.dy = (particle.v.dy + ay * dt) * damping
             let speed = hypot(particle.v.dx, particle.v.dy)
@@ -317,11 +338,11 @@ final class VisualizerEngine {
             }
         }
         for (i, path) in paths.enumerated() {
-            ctx.stroke(path, with: .color(color(bucket: i, saturation: 0.55, opacity: 0.9)), style: StrokeStyle(lineWidth: 1.6, lineCap: .round))
+            ctx.stroke(path, with: .color(color(bucket: i, saturation: 0.55, opacity: 0.6 + 0.4 * max(band(i), musicFrame == nil ? 0.75 : 0))), style: StrokeStyle(lineWidth: 1.6 + 2.2 * band(i), lineCap: .round))
         }
         for (i, a) in attractors().enumerated() {
             let c = f.point(a.x, a.y)
-            let r = f.unit * CGFloat(0.12 + 0.05 * min(energy, 2))
+            let r = f.unit * CGFloat(0.12 + 0.05 * min(energy, 2) + 0.22 * band(i))
             ctx.fill(Path(ellipseIn: CGRect(x: c.x - r, y: c.y - r, width: 2 * r, height: 2 * r)), with: .radialGradient(
                 Gradient(colors: [color(bucket: i + 1, saturation: 0.4, opacity: 0.8), .clear]),
                 center: c, startRadius: 0, endRadius: r
@@ -337,13 +358,15 @@ final class VisualizerEngine {
         var glowPaths: [(Path, Color)] = []
         var corePaths: [(Path, Color)] = []
         for ribbon in ribbons {
+            let level = band(ribbon.bucket)
+            let reach = amplitude * (1 + level * 0.45)
             for echo in 0..<3 {
                 var path = Path()
                 var mirrored = Path()
                 for k in 0..<150 {
                     let s = clock * 0.9 - Double(k) * 0.016 - Double(echo) * 0.07
-                    let x = sin(ribbon.a * s + ribbon.phase) * Double(f.aspect) * 0.8 * amplitude
-                    let y = sin(ribbon.b * s) * cos(ribbon.c * s * 0.5 + ribbon.phase) * 0.85 * amplitude
+                    let x = sin(ribbon.a * s + ribbon.phase) * Double(f.aspect) * 0.8 * reach
+                    let y = sin(ribbon.b * s) * cos(ribbon.c * s * 0.5 + ribbon.phase) * 0.85 * reach
                     let p = f.point(x, y)
                     let m = f.point(-x, y)
                     if k == 0 {
@@ -356,8 +379,8 @@ final class VisualizerEngine {
                 }
                 let fade = 1.0 / Double(echo + 1)
                 path.addPath(mirrored)
-                glowPaths.append((path, color(bucket: ribbon.bucket, opacity: 0.35 * fade)))
-                corePaths.append((path, color(bucket: ribbon.bucket, saturation: 0.5, opacity: 0.85 * fade)))
+                glowPaths.append((path, color(bucket: ribbon.bucket, opacity: (0.35 + 0.4 * level) * fade)))
+                corePaths.append((path, color(bucket: ribbon.bucket, saturation: 0.5, opacity: min(1, 0.85 + 0.3 * level) * fade)))
             }
         }
         ctx.drawLayer { layer in
@@ -378,7 +401,7 @@ final class VisualizerEngine {
     private func stepStars(_ dt: Double) {
         let speed = warpSpeed
         for i in stars.indices {
-            stars[i].z -= speed * dt
+            stars[i].z -= speed * (1 + band(stars[i].bucket) * 1.8) * dt
             if stars[i].z < 0.03 {
                 stars[i] = Star(x: .random(in: -1.6...1.6), y: .random(in: -1...1), z: 1, bucket: stars[i].bucket)
             }
@@ -409,7 +432,39 @@ final class VisualizerEngine {
             let phase = (clock * 0.6 + Double(k) / 6).truncatingRemainder(dividingBy: 1)
             let r = f.unit * CGFloat(pow(phase, 2.2) * 2.4)
             let rect = CGRect(x: f.center.x - r * f.aspect * 0.8, y: f.center.y - r, width: 2 * r * f.aspect * 0.8, height: 2 * r)
-            ctx.stroke(Path(ellipseIn: rect), with: .color(color(bucket: k % 5, opacity: 0.18 * phase)), lineWidth: 2)
+            ctx.stroke(Path(ellipseIn: rect), with: .color(color(bucket: k % 5, opacity: (0.18 + 0.5 * band(0)) * phase)), lineWidth: 2 + 4 * band(0))
+        }
+    }
+
+    // MARK: Spectrum: the song itself, as a ring of light around the center
+
+    /// The spectrum mirrored around a circle, bass at the bottom. Sits under the bursts and
+    /// over the preset, so the look you picked still leads.
+    private func drawSpectrum(_ ctx: inout GraphicsContext, _ f: Frame, _ levels: MusicLevels) {
+        let count = levels.bands.count
+        let inner = f.unit * CGFloat(0.34 + 0.06 * levels.bass)
+        var paths = Array(repeating: Path(), count: Self.buckets)
+        for side in [-1.0, 1.0] {
+            for i in 0..<count {
+                let angle = .pi / 2 + side * (Double(i) + 0.5) / Double(count) * .pi
+                let length = f.unit * CGFloat(0.02 + 0.32 * levels.bands[i])
+                let dir = CGPoint(x: cos(angle), y: sin(angle))
+                let a = CGPoint(x: f.center.x + dir.x * inner, y: f.center.y + dir.y * inner)
+                let b = CGPoint(x: f.center.x + dir.x * (inner + length), y: f.center.y + dir.y * (inner + length))
+                let bucket = min(Self.buckets - 2, i * (Self.buckets - 1) / count)
+                paths[bucket].move(to: a)
+                paths[bucket].addLine(to: b)
+            }
+        }
+        let width = max(2, f.unit * 0.012)
+        ctx.drawLayer { layer in
+            layer.addFilter(.blur(radius: 8))
+            for (i, path) in paths.enumerated() {
+                layer.stroke(path, with: .color(color(bucket: i, opacity: 0.55)), style: StrokeStyle(lineWidth: width * 2.5, lineCap: .round))
+            }
+        }
+        for (i, path) in paths.enumerated() {
+            ctx.stroke(path, with: .color(color(bucket: i, saturation: 0.45, opacity: 0.95)), style: StrokeStyle(lineWidth: width, lineCap: .round))
         }
     }
 

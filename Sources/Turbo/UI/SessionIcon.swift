@@ -76,13 +76,6 @@ struct SessionIcon: View {
         }
         .frame(width: size, height: size)
         .overlay { ring }
-        .overlay(alignment: .topLeading) {
-            if session.agent.isCloud {
-                badge(symbol: "cloud.fill", fill: DS.Palette.card, tint: DS.Palette.textSecondary)
-                    .offset(x: -size * 0.06, y: -size * 0.06)
-                    .help("Runs in the cloud")
-            }
-        }
         .overlay(alignment: .bottomTrailing) {
             status.offset(x: size * 0.06, y: size * 0.06)
         }

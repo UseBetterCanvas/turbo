@@ -99,8 +99,10 @@ private struct MainSidebar: View {
             Rectangle().fill(Color.white.opacity(0.06)).frame(height: 1).padding(.horizontal, 12)
 
             UserRow()
-                .padding(.horizontal, 12)
-                .padding(.vertical, 10)
+                .padding(.horizontal, 14)
+                .padding(.top, 10)
+                // Clear of the pop-up's rounded bottom corner.
+                .padding(.bottom, 16)
         }
         .background(DS.Palette.rail)
     }
@@ -414,7 +416,7 @@ private struct SessionPane: View {
                                 .font(DSFont.display(22))
                                 .foregroundStyle(DS.Palette.textPrimary)
                                 .lineLimit(2)
-                            Text([session.place, session.agent.displayName, session.when(now: context.date)].compactMap { $0 }.joined(separator: " · "))
+                            Text([session.place, session.agent.displayName, AgentSession.relative(session.lastActivityAt, now: context.date)].compactMap { $0 }.joined(separator: " · "))
                                 .font(DSFont.sans(13, .medium).monospacedDigit())
                                 .foregroundStyle(DS.Palette.textSecondary)
                         }
@@ -496,13 +498,13 @@ private struct SessionPane: View {
                 Button(session.link != nil ? "Open Session" : "Go to Terminal") { model.open(session) }
                     .buttonStyle(model.pendingApproval(for: session) == nil ? AnyButtonStyle(PrimaryButtonStyle()) : AnyButtonStyle(SecondaryButtonStyle()))
             }
-            Spacer()
             if !session.phase.isActive {
                 Button("Dismiss") {
                     withAnimation(DS.Motion.base) { model.dismiss(session) }
                 }
                 .buttonStyle(GhostButtonStyle())
             }
+            Spacer()
         }
     }
 }
@@ -515,7 +517,7 @@ private struct StatusLine: View {
     var body: some View {
         HStack(spacing: 8) {
             Circle().fill(color).frame(width: 8, height: 8)
-            Text(session.statusText(now: now))
+            Text(text)
                 .font(DSFont.sans(13, .semibold).monospacedDigit())
                 .foregroundStyle(session.isWaiting ? DS.Palette.gold : DS.Palette.textPrimary)
                 .lineLimit(2)
@@ -523,6 +525,14 @@ private struct StatusLine: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
         .background(Capsule().fill(color.opacity(0.12)))
+    }
+
+    /// Done sessions say when and how long; the result itself is shown just below.
+    private var text: String {
+        guard case .done = session.phase else { return session.statusText(now: now) }
+        var line = (session.failed ? "Failed " : "Done ") + AgentSession.relative(session.finishedAt ?? session.lastActivityAt, now: now).lowercased()
+        if let took = session.cookDuration { line += " · took \(Format.duration(took))" }
+        return line
     }
 
     private var color: Color {
