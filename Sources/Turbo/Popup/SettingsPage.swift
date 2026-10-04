@@ -123,11 +123,15 @@ private struct ConnectionRow<Control: View, Details: View>: View {
     @State private var expanded: Bool
     @State private var hovering = false
 
+    /// True while the row needs attention; it opens itself when this turns on.
+    let needsAttention: Bool
+
     init(agent: Agent, status: (String, StatusTone), startsExpanded: Bool, @ViewBuilder control: @escaping () -> Control, @ViewBuilder details: @escaping () -> Details) {
         self.agent = agent
         self.status = status
         self.control = control
         self.details = details
+        self.needsAttention = startsExpanded
         _expanded = State(initialValue: startsExpanded)
     }
 
@@ -151,6 +155,9 @@ private struct ConnectionRow<Control: View, Details: View>: View {
             .padding(.vertical, 11)
             .contentShape(Rectangle())
             .onTapGesture { if hasDetails { withAnimation(DS.Motion.base) { expanded.toggle() } } }
+            .onChange(of: needsAttention) { attention in
+                if attention { withAnimation(DS.Motion.base) { expanded = true } }
+            }
 
             if expanded && hasDetails {
                 VStack(alignment: .leading, spacing: DS.Space.s) {
@@ -317,27 +324,53 @@ private struct CodexCloudDetails: View {
 /// The optional Codex notify hook, tucked under the Codex row.
 private struct CodexNotifyDetails: View {
     @State private var status: Integrations.CodexStatus = Integrations.codexStatus
+    @State private var error: String?
+    @State private var copied = false
+
+    static let chainCommand = "curl -s -m 1 --noproxy '*' -X POST --data-binary \"$1\" http://127.0.0.1:\(HookInstaller.defaultPort)/hook/codex"
 
     var body: some View {
-        HStack(spacing: DS.Space.s) {
-            switch status {
-            case .connected:
-                Text("Backup notify hook is on.").font(DS.Typography.caption).foregroundStyle(DS.Palette.textSecondary)
-                Spacer()
-                Button("Remove") { try? Integrations.uninstallCodex(); status = Integrations.codexStatus }
+        VStack(alignment: .leading, spacing: DS.Space.s) {
+            HStack(spacing: DS.Space.s) {
+                switch status {
+                case .connected:
+                    Text("Backup notify hook is on.").font(DS.Typography.caption).foregroundStyle(DS.Palette.textSecondary)
+                    Spacer()
+                    Button("Remove") { run { try Integrations.uninstallCodex() } }
+                        .buttonStyle(SecondaryButtonStyle())
+                case .notConnected:
+                    Text("Optional: add a backup notify hook to ~/.codex/config.toml.").font(DS.Typography.caption).foregroundStyle(DS.Palette.textSecondary)
+                    Spacer()
+                    Button("Add") { run { try Integrations.installCodex() } }
+                        .buttonStyle(SecondaryButtonStyle())
+                case .conflict:
+                    Text("You already have a Codex notify program, and Codex allows only one. To use both, have your program also run this command.")
+                        .font(DS.Typography.caption)
+                        .foregroundStyle(DS.Palette.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Spacer(minLength: DS.Space.s)
+                    Button(copied ? "Copied" : "Copy Command") {
+                        copy(Self.chainCommand)
+                        copied = true
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { copied = false }
+                    }
                     .buttonStyle(SecondaryButtonStyle())
-            case .notConnected:
-                Text("Optional: add a backup notify hook to ~/.codex/config.toml.").font(DS.Typography.caption).foregroundStyle(DS.Palette.textSecondary)
-                Spacer()
-                Button("Add") { try? Integrations.installCodex(); status = Integrations.codexStatus }
-                    .buttonStyle(SecondaryButtonStyle())
-            case .conflict:
-                Text("You already have a Codex notify program, so Turbo left it alone. Session watching still works.")
-                    .font(DS.Typography.caption)
-                    .foregroundStyle(DS.Palette.textSecondary)
-                    .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            if let error {
+                Text(error).font(DS.Typography.caption).foregroundStyle(DS.Palette.bad)
             }
         }
+    }
+
+    private func run(_ action: () throws -> Void) {
+        do {
+            try action()
+            error = nil
+        } catch {
+            self.error = "Couldn't update ~/.codex/config.toml: \(error.localizedDescription)"
+        }
+        status = Integrations.codexStatus
     }
 }
 
@@ -361,6 +394,13 @@ private struct IslandSection: View {
                 Stepper("\(Int(prefs.minimumCookSeconds)) sec", value: $prefs.minimumCookSeconds, in: 0...300, step: 5)
                     .font(DS.Typography.bodyStrong.monospacedDigit())
             }
+            RowDivider()
+            SettingRow(title: "Keep the done card up for", detail: "Hovering keeps it open.") {
+                Stepper("\(Int(prefs.celebrateSeconds)) sec", value: $prefs.celebrateSeconds, in: 2...60, step: 1)
+                    .font(DS.Typography.bodyStrong.monospacedDigit())
+            }
+            RowDivider()
+            ToggleRow(title: "Click a card to open its session", isOn: $prefs.returnToTerminalOnClick)
             RowDivider()
             SettingRow(title: "Sound when done") {
                 HStack(spacing: DS.Space.s) {
@@ -432,10 +472,7 @@ private struct GeneralSection: View {
                 set: { model.setLaunchAtLogin($0) }
             ))
             RowDivider()
-            SettingRow(title: "Update Turbo", detail: "Copies the install command. Paste it in Terminal.") {
-                Button("Copy Command") { copy(Integrations.installCommand) }
-                    .buttonStyle(SecondaryButtonStyle())
-            }
+            UpdateRow(updater: model.updater)
             RowDivider()
             SettingRow(title: "Welcome tour") {
                 Button("Show") { model.showOnboarding() }.buttonStyle(SecondaryButtonStyle())
@@ -453,6 +490,50 @@ private struct GeneralSection: View {
                 .foregroundStyle(DS.Palette.textSecondary)
         }
         .padding(.horizontal, DS.Space.xs)
+    }
+}
+
+/// "Update" lives here: status on the left, one button on the right.
+struct UpdateRow: View {
+    @ObservedObject var updater: Updater
+
+    var body: some View {
+        SettingRow(title: "Updates", detail: detail) {
+            switch updater.state {
+            case .available:
+                Button("Update") { Task { await updater.install() } }
+                    .buttonStyle(PrimaryButtonStyle())
+            case .checking, .downloading, .installing:
+                ProgressView().controlSize(.small)
+            case .needsAccess:
+                HStack(spacing: DS.Space.s) {
+                    Button("Copy Sign-in Command") { copy("brew install gh && gh auth login") }
+                        .buttonStyle(SecondaryButtonStyle())
+                    Button("Check Again") { Task { await updater.check() } }
+                        .buttonStyle(SecondaryButtonStyle())
+                }
+            case .manualInstall:
+                Button("Copy Install Command") { copy(Integrations.installCommand) }
+                    .buttonStyle(PrimaryButtonStyle())
+            default:
+                Button("Check Now") { Task { await updater.check() } }
+                    .buttonStyle(SecondaryButtonStyle())
+            }
+        }
+    }
+
+    private var detail: String {
+        switch updater.state {
+        case .idle: return "Turbo checks for new versions on its own."
+        case .checking: return "Checking…"
+        case .upToDate: return "You're on the latest version."
+        case .available: return "A new version is ready. Turbo will reopen after updating."
+        case .downloading: return "Downloading…"
+        case .installing: return "Installing. Turbo will reopen in a moment."
+        case .needsAccess: return "Turbo's repo is private. Sign in to GitHub in Terminal once, then check again."
+        case let .manualInstall(message): return message
+        case let .failed(message): return message
+        }
     }
 }
 

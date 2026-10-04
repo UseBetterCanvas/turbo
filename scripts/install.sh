@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Installs (or updates) Turbo into /Applications and launches it.
 #
-#   gh api repos/UseBetterCanvas/turbo/contents/scripts/install.sh -H "Accept: application/vnd.github.raw" | bash
+#   gh api repos/UseBetterCanvas/turbo/contents/scripts/install.sh -H "Accept: application/vnd.github.raw" > /tmp/turbo-install.sh && bash /tmp/turbo-install.sh
 #
 # The repo is private, so this uses the GitHub CLI (https://cli.github.com) to download.
 # Downloading from the command line also skips macOS's "Apple could not verify" prompt,
@@ -18,7 +18,8 @@ if ! command -v gh >/dev/null 2>&1; then
   echo "Then sign in with: gh auth login"
   exit 1
 fi
-if ! gh auth status >/dev/null 2>&1; then
+# Only github.com matters here (other configured hosts can be signed out).
+if ! gh auth status --hostname github.com >/dev/null 2>&1; then
   echo "Sign in to GitHub first: gh auth login"
   exit 1
 fi

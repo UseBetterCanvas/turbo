@@ -111,6 +111,20 @@ final class Preferences: ObservableObject {
         static let onboarded = "hasOnboarded"
     }
 
+    /// Visualizer used to be a mode that auto-opened by default. Keep that behavior for anyone who
+    /// picked it, unless they had explicitly turned auto-open off.
+    private func migrateVisualizerMode() {
+        let migratedKey = "migratedVisualizerMode"
+        guard !defaults.bool(forKey: migratedKey) else { return }
+        defaults.set(true, forKey: migratedKey)
+        let saved = Bundle.main.bundleIdentifier.flatMap { defaults.persistentDomain(forName: $0) } ?? [:]
+        let choseVisualizer = saved[Key.mode] as? String == CookMode.visualizer.rawValue
+        let explicitAutoOpen = saved[Key.visualizerAutoOpen] as? Bool
+        if choseVisualizer && explicitAutoOpen != false {
+            visualizerAutoOpen = true
+        }
+    }
+
     init() {
         defaults.register(defaults: [
             Key.mode: CookMode.island.rawValue,
@@ -147,5 +161,6 @@ final class Preferences: ObservableObject {
         visualizerFullScreen = defaults.bool(forKey: Key.visualizerFullScreen)
         visualizerAutoClose = defaults.bool(forKey: Key.visualizerAutoClose)
         visualizerPreset = VisualizerPreset(rawValue: defaults.string(forKey: Key.visualizerPreset) ?? "") ?? .magnetosphere
+        migrateVisualizerMode()
     }
 }

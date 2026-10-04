@@ -227,8 +227,16 @@ private struct SpotlightCard: View {
         ZStack(alignment: .topTrailing) {
             HStack(alignment: .center, spacing: 14) {
                 Group {
-                    if spotlight.kind == .finished {
+                    if spotlight.kind == .finished && !session.failed {
                         SuccessMark(tint: DS.Palette.ok, size: 48)
+                    } else if spotlight.kind == .finished {
+                        ZStack {
+                            Circle().fill(DS.Palette.bad.opacity(0.18))
+                            Image(systemName: "xmark")
+                                .font(.system(size: 20, weight: .bold))
+                                .foregroundStyle(DS.Palette.bad)
+                        }
+                        .frame(width: 48, height: 48)
                     } else {
                         ZStack {
                             Circle().fill(DS.Palette.gold.opacity(0.18))
@@ -324,7 +332,7 @@ private struct SpotlightCard: View {
 
     private func title(for session: AgentSession) -> String {
         switch spotlight.kind {
-        case .finished: return "\(session.projectName) is done"
+        case .finished: return session.failed ? "\(session.projectName) failed" : "\(session.projectName) is done"
         case .needsInput: return "\(session.projectName) needs you"
         }
     }
@@ -518,7 +526,9 @@ struct SessionRow: View {
             case .needsInput:
                 Image(systemName: "hand.raised.fill").foregroundStyle(DS.Palette.gold).font(.system(size: 12))
             case .done:
-                Image(systemName: "checkmark.circle.fill").foregroundStyle(DS.Palette.ok).font(.system(size: 13))
+                Image(systemName: session.failed ? "xmark.circle.fill" : "checkmark.circle.fill")
+                    .foregroundStyle(session.failed ? DS.Palette.bad : DS.Palette.ok)
+                    .font(.system(size: 13))
             case .idle:
                 EmptyView()
             }

@@ -168,19 +168,42 @@ final class CodexCloudTests: XCTestCase {
         XCTAssertEqual(CodexCloud.Phase(status: "weird"), .unknown)
     }
 
-    func testTrackerOnlyAnnouncesChanges() {
+    func testTrackerOnlyAnnouncesTransitions() {
         let tracker = CodexCloud.Tracker()
+        func poll(_ tasks: [(String, String, String)]) -> [AgentEventKind] {
+            tracker.update(with: CodexCloud.parseList(json(tasks))!).map(\.kind)
+        }
         // First poll: the running task appears, the old finished one stays quiet.
-        let first = tracker.update(with: CodexCloud.parseList(json([("t1", "running", "1"), ("old", "ready", "0")]))!)
-        XCTAssertEqual(first.map(\.kind), [.promptSubmitted])
-        XCTAssertEqual(first.first?.agent, .codexCloud)
-        XCTAssertEqual(first.first?.title, "Fix t1")
-        // Nothing changed.
-        XCTAssertTrue(tracker.update(with: CodexCloud.parseList(json([("t1", "running", "1"), ("old", "ready", "0")]))!).isEmpty)
-        // Progress tick, then it finishes, and a new one starts.
-        XCTAssertEqual(tracker.update(with: CodexCloud.parseList(json([("t1", "running", "2")]))!).map(\.kind), [.activity(tool: nil)])
-        let last = tracker.update(with: CodexCloud.parseList(json([("t1", "ready", "3"), ("t2", "pending", "3")]))!)
-        XCTAssertEqual(last.map(\.kind), [.turnComplete(summary: "did t1"), .promptSubmitted])
+        XCTAssertEqual(poll([("t1", "running", "1"), ("old", "ready", "0")]), [.promptSubmitted])
+        // Still running with no changes: a heartbeat, so long tasks never look stale.
+        XCTAssertEqual(poll([("t1", "running", "1"), ("old", "ready", "0")]), [.activity(tool: nil)])
+        // It finishes and a new one starts.
+        XCTAssertEqual(poll([("t1", "ready", "3"), ("t2", "pending", "3")]), [.turnComplete(summary: "did t1"), .promptSubmitted])
+        // ready → applied is not a second completion.
+        XCTAssertEqual(poll([("t1", "applied", "4"), ("t2", "running", "4")]), [.activity(tool: nil)])
+        // A failure is reported as a failure.
+        XCTAssertEqual(poll([("t2", "error", "5")]), [.turnFailed(summary: "did t2")])
+        // A finished task first seen late doesn't get announced.
+        XCTAssertEqual(poll([("late", "completed", "6")]), [])
+    }
+
+    func testMissingActiveTasksAndReset() {
+        let tracker = CodexCloud.Tracker()
+        _ = tracker.update(with: CodexCloud.parseList(json([("t1", "running", "1"), ("t2", "ready", "1")]))!)
+        XCTAssertEqual(tracker.activeIDs(missingFrom: CodexCloud.parseList(json([("t3", "running", "2")]))!), ["t1"])
+        tracker.reset()
+        // After a reset the finished task is "first seen" again, so it stays quiet.
+        XCTAssertEqual(tracker.update(with: CodexCloud.parseList(json([("t1", "ready", "3")]))!).map(\.kind), [])
+    }
+
+    func testFailedTurnMarksSession() {
+        let store = SessionStore()
+        store.apply(AgentEvent(agent: .codexCloud, sessionID: "x", kind: .promptSubmitted))
+        guard case let .finished(s) = store.apply(AgentEvent(agent: .codexCloud, sessionID: "x", kind: .turnFailed(summary: "boom"))).first else { return XCTFail() }
+        XCTAssertTrue(s.failed)
+        XCTAssertEqual(s.summary, "boom")
+        guard case let .started(again) = store.apply(AgentEvent(agent: .codexCloud, sessionID: "x", kind: .promptSubmitted, date: Date().addingTimeInterval(60))).first else { return XCTFail() }
+        XCTAssertFalse(again.failed)
     }
 
     func testTrackerFeedsStore() {
@@ -193,6 +216,36 @@ final class CodexCloudTests: XCTestCase {
         }
         XCTAssertEqual(finished?.projectName, "Fix t1")
         XCTAssertEqual(finished?.link?.absoluteString, "https://chatgpt.com/codex/tasks/t1")
+    }
+}
+
+final class UpdateInfoTests: XCTestCase {
+    // Not `release`: on macOS that name collides with NSObject's -release and crashes XCTest.
+    let releaseJSON = #"{"tag_name":"latest-build","published_at":"2026-10-04T06:25:49Z","body":"Built from main @ 4061f61 (build 42).\n\n**Install**...","assets":[{"id":609300000,"name":"Turbo.zip","size":2240349}]}"#
+
+    func testParseRelease() throws {
+        let info = try XCTUnwrap(UpdateInfo.parse(release: Data(releaseJSON.utf8)))
+        XCTAssertEqual(info.commit, "4061f61")
+        XCTAssertEqual(info.assetID, 609300000)
+        XCTAssertEqual(info.assetSize, 2240349)
+        XCTAssertNil(UpdateInfo.parse(release: Data(#"{"body":"no commit","assets":[]}"#.utf8)))
+    }
+
+    func testNewerComparison() throws {
+        let info = try XCTUnwrap(UpdateInfo.parse(release: Data(releaseJSON.utf8)))
+        XCTAssertEqual(info.build, 42)
+        // Same build: nothing to do.
+        XCTAssertFalse(info.isNewer(thanInstalledBuild: 42, commit: "4061f61fa4715b7270d71280f24ffcb7de759fe2"))
+        // Older CI build: update.
+        XCTAssertTrue(info.isNewer(thanInstalledBuild: 41, commit: "2cf2267d91d6f2fb6db717ec5a7785b396d1a0b0"))
+        // Newer build than the release (e.g. a local or branch build): never downgrade.
+        XCTAssertFalse(info.isNewer(thanInstalledBuild: 50, commit: "aaaaaaa"))
+        // Local builds carry no build number: no prompts.
+        XCTAssertFalse(info.isNewer(thanInstalledBuild: nil, commit: "dev"))
+        // Releases from before build numbers aren't offered either.
+        var old = info
+        old.build = nil
+        XCTAssertFalse(old.isNewer(thanInstalledBuild: 41, commit: "2cf2267"))
     }
 }
 

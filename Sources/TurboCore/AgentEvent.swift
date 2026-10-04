@@ -31,6 +31,8 @@ public enum AgentEventKind: Equatable, Sendable {
     case needsInput(message: String?)
     /// The turn finished.
     case turnComplete(summary: String?)
+    /// The turn ended in an error or was cancelled.
+    case turnFailed(summary: String?)
     case sessionEnded
 }
 

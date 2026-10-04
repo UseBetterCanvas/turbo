@@ -41,9 +41,14 @@ public enum CodexCloud {
 
     /// Parses `codex cloud list --json`: `{"tasks": [...], "cursor": ...}`.
     public static func parseList(_ data: Data) -> [Task]? {
+        parsePage(data)?.tasks
+    }
+
+    /// The tasks plus the cursor for the next page, if any.
+    public static func parsePage(_ data: Data) -> (tasks: [Task], cursor: String?)? {
         guard let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
               let tasks = root["tasks"] as? [[String: Any]] else { return nil }
-        return tasks.compactMap { t in
+        let parsed: [Task] = tasks.compactMap { t in
             guard let id = t["id"] as? String else { return nil }
             return Task(
                 id: id,
@@ -55,41 +60,47 @@ public enum CodexCloud {
                 summary: t["summary"] as? String
             )
         }
+        let cursor = (root["cursor"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+        return (parsed, cursor)
     }
 
-    /// Remembers what it saw last time and emits events only for changes. The first poll
-    /// announces tasks that are still working (so they appear on the board) but not ones that
-    /// finished before Turbo started.
+    /// Remembers each task's last phase and emits events for transitions:
+    /// - a task seen working is announced as started, then gets a heartbeat on every poll (so
+    ///   long tasks never look stale),
+    /// - it's announced finished or failed only when seen moving out of working. Tasks that
+    ///   were already finished when first seen stay quiet, and done → applied isn't news.
     public final class Tracker {
         private var seen: [String: Task] = [:]
-        private var primed = false
 
         public init() {}
+
+        /// Forget everything, e.g. when watching is switched off and on again.
+        public func reset() {
+            seen.removeAll()
+        }
+
+        /// Tasks we last saw working that weren't in `tasks` (pushed off the first page).
+        public func activeIDs(missingFrom tasks: [Task]) -> Set<String> {
+            let present = Set(tasks.map(\.id))
+            return Set(seen.values.filter { $0.phase == .working && !present.contains($0.id) }.map(\.id))
+        }
 
         public func update(with tasks: [Task], now: Date = Date()) -> [AgentEvent] {
             var events: [AgentEvent] = []
             for task in tasks {
-                let previous = seen[task.id]
+                let previous = seen[task.id]?.phase
                 seen[task.id] = task
-                guard previous?.status != task.status || previous == nil else {
-                    // Same status but newer timestamp while working: count it as a beat.
-                    if task.phase == .working, previous?.updatedAt != task.updatedAt {
-                        events.append(event(task, .activity(tool: nil), now))
-                    }
-                    continue
-                }
                 switch task.phase {
                 case .working:
-                    events.append(event(task, .promptSubmitted, now))
+                    events.append(event(task, previous == .working ? .activity(tool: nil) : .promptSubmitted, now))
                 case .done:
-                    if primed { events.append(event(task, .turnComplete(summary: task.summary), now)) }
+                    if previous == .working { events.append(event(task, .turnComplete(summary: task.summary), now)) }
                 case .failed:
-                    if primed { events.append(event(task, .turnComplete(summary: "Failed: " + (task.summary ?? task.status)), now)) }
+                    if previous == .working { events.append(event(task, .turnFailed(summary: task.summary ?? task.status), now)) }
                 case .unknown:
                     break
                 }
             }
-            primed = true
             return events
         }
 

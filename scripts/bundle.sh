@@ -4,6 +4,11 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 VERSION="${VERSION:-0.1.0}"
+# The in-app updater compares this against the latest release.
+COMMIT="${GITHUB_SHA:-$(git rev-parse HEAD 2>/dev/null || echo dev)}"
+# Only CI builds get a build number; local builds never receive update prompts.
+BUILD_KEY=""
+if [[ -n "${GITHUB_RUN_NUMBER:-}" ]]; then BUILD_KEY="<key>TurboBuild</key><string>${GITHUB_RUN_NUMBER}</string>"; fi
 # Universal binary (Apple Silicon + Intel). Set ARCHS="" to build for this Mac only.
 ARCH_FLAGS=()
 for arch in ${ARCHS-arm64 x86_64}; do ARCH_FLAGS+=(--arch "$arch"); done
@@ -30,6 +35,8 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <key>CFBundleIconFile</key><string>AppIcon</string>
     <key>CFBundleShortVersionString</key><string>${VERSION}</string>
     <key>CFBundleVersion</key><string>${VERSION}</string>
+    <key>TurboCommit</key><string>${COMMIT}</string>
+    ${BUILD_KEY}
     <key>LSMinimumSystemVersion</key><string>13.0</string>
     <key>LSUIElement</key><true/>
     <key>NSHighResolutionCapable</key><true/>

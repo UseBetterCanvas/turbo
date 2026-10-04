@@ -72,6 +72,7 @@ final class AppModel: ObservableObject {
     let preferences = Preferences()
     let neighbors = NotchNeighbors()
     let pulses = PassthroughSubject<Pulse, Never>()
+    let updater = Updater()
 
     @Published private(set) var sessions: [AgentSession] = []
     @Published private(set) var spotlight: Spotlight?
@@ -188,6 +189,8 @@ final class AppModel: ObservableObject {
             }
             .store(in: &forwarding)
 
+        updater.start()
+
         island = IslandPanelController(model: self)
         island?.show()
         popup = PopupController(model: self)
@@ -257,8 +260,12 @@ final class AppModel: ObservableObject {
             let worthCelebrating = (session.cookDuration ?? .infinity) >= preferences.minimumCookSeconds
             if worthCelebrating {
                 enqueue(Spotlight(kind: .finished, session: session))
-                playSound(named: preferences.soundName)
-                NSHapticFeedbackManager.defaultPerformer.perform(.levelChange, performanceTime: .now)
+                if session.failed {
+                    playSound(named: "Basso")
+                } else {
+                    playSound(named: preferences.soundName)
+                    NSHapticFeedbackManager.defaultPerformer.perform(.levelChange, performanceTime: .now)
+                }
             }
             if session.summary == nil, let path = session.transcriptPath {
                 loadSummary(for: session.id, transcriptPath: path)
@@ -442,6 +449,9 @@ final class AppModel: ObservableObject {
     /// New channel: old setup scripts stop reaching this Mac.
     func resetCloudChannel() {
         preferences.cloudChannel = CloudRelay.newChannel()
+        // Pings from the old channel no longer count as this setup working.
+        lastHeard[.cloud] = nil
+        lastRelayMessage = nil
     }
 
     // MARK: Connection test

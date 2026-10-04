@@ -13,6 +13,7 @@ struct SessionsPage: View {
             if let error = model.serverError {
                 Callout(symbol: "", text: error, tone: .bad)
             }
+            UpdateBanner(updater: model.updater)
             if !Integrations.isClaudeInstalled && !prefs.cloudEnabled {
                 SetupBanner()
             }
@@ -169,7 +170,7 @@ struct SessionRowView: View {
         switch session.phase {
         case .needsInput: return DS.Palette.gold
         case .cooking: return DS.Palette.brandText
-        case .done: return DS.Palette.ok
+        case .done: return session.failed ? DS.Palette.bad : DS.Palette.ok
         case .idle: return DS.Palette.textTertiary
         }
     }
@@ -184,12 +185,62 @@ struct SessionRowView: View {
             if let start = session.turnStartedAt { parts.append(Format.clock(now.timeIntervalSince(start))) }
             if let tool = session.lastTool { parts.append(tool) }
         case .done:
-            if let duration = session.cookDuration { parts.append("cooked in \(Format.duration(duration))") }
+            if session.failed { parts.append("Failed") }
+            if let duration = session.cookDuration { parts.append("\(session.failed ? "ran for" : "cooked in") \(Format.duration(duration))") }
             if let summary = Format.snippet(session.summary, limit: 80) { parts.append(summary) }
         case .idle:
-            break
+            parts.append("Idle")
         }
         return parts.joined(separator: " · ")
+    }
+}
+
+/// Shown on the board when a new version is ready.
+private struct UpdateBanner: View {
+    @ObservedObject var updater: Updater
+
+    var body: some View {
+        if case let .manualInstall(message) = updater.state {
+            HStack(spacing: DS.Space.m) {
+                Image(systemName: "lock.fill")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(DS.Palette.gold)
+                Text(message)
+                    .font(DS.Typography.caption)
+                    .foregroundStyle(DS.Palette.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer()
+                Button("Copy Install Command") { copy(Integrations.installCommand) }
+                    .buttonStyle(PrimaryButtonStyle())
+            }
+            .padding(.horizontal, DS.Space.l)
+            .padding(.vertical, DS.Space.s)
+            .background(RoundedRectangle(cornerRadius: DS.Radius.l, style: .continuous).fill(DS.Palette.card))
+        } else if updater.updateAvailable || updater.installError != nil {
+            HStack(spacing: DS.Space.m) {
+                Image(systemName: updater.installError == nil ? "arrow.down.circle.fill" : "exclamationmark.triangle.fill")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(updater.installError == nil ? DS.Palette.brandText : DS.Palette.bad)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(updater.installError == nil ? "A new version of Turbo is ready." : "The update didn't finish.")
+                        .font(DS.Typography.bodyStrong)
+                    if let error = updater.installError {
+                        Text(error).font(DS.Typography.caption).foregroundStyle(DS.Palette.textSecondary).lineLimit(2)
+                    }
+                }
+                Spacer()
+                if updater.installError != nil {
+                    Button("Try Again") { Task { await updater.retryInstall() } }
+                        .buttonStyle(PrimaryButtonStyle())
+                } else {
+                    Button("Update") { Task { await updater.install() } }
+                        .buttonStyle(PrimaryButtonStyle())
+                }
+            }
+            .padding(.horizontal, DS.Space.l)
+            .padding(.vertical, DS.Space.s)
+            .background(RoundedRectangle(cornerRadius: DS.Radius.l, style: .continuous).fill(DS.Palette.card))
+        }
     }
 }
 
