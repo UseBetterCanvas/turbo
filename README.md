@@ -11,21 +11,22 @@ Built by BetterCampus, on the BetterCampus design system.
 
 ## Install
 
-Paste into Terminal (macOS 13+, Apple Silicon and Intel):
+The repo is private, so installs go through the [GitHub CLI](https://cli.github.com)
+(`brew install gh`, then `gh auth login` once). Paste into Terminal (macOS 13+, Apple
+Silicon and Intel):
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/UseBetterCanvas/turbo/main/scripts/install.sh | bash
+gh api repos/UseBetterCanvas/turbo/contents/scripts/install.sh -H "Accept: application/vnd.github.raw" | bash
 ```
 
 It installs Turbo into Applications and opens it. Run it again any time to update.
 Look for the paw in your menu bar.
 
-Prefer a regular download? Grab
-**[Turbo.zip](https://github.com/UseBetterCanvas/turbo/releases/download/latest-build/Turbo.zip)**,
-unzip it and drag Turbo.app to Applications. Turbo isn't notarized by Apple yet, so macOS
-will say it "could not verify" it: click **Done**, then go to System Settings → Privacy &
-Security, scroll down and click **Open Anyway**. The Terminal install skips this, because
-files downloaded with `curl` aren't flagged as coming from the internet.
+Prefer the browser? While signed into GitHub, download **Turbo.zip** from the
+[latest build](https://github.com/UseBetterCanvas/turbo/releases/tag/latest-build), unzip it
+and drag Turbo.app to Applications. Turbo isn't notarized by Apple yet, so macOS will say it
+"could not verify" it: click **Done**, then go to System Settings → Privacy & Security,
+scroll down and click **Open Anyway**. The Terminal install skips this.
 
 ## Three shapes, nothing else
 

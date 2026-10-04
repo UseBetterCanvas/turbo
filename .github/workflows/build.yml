@@ -40,6 +40,6 @@ jobs:
             --title "Turbo (latest build)" \
             --notes "Built from ${GITHUB_REF_NAME} @ ${GITHUB_SHA::7}.
 
-          Easiest install (skips the unverified-app prompt): \`curl -fsSL https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/main/scripts/install.sh | bash\`
+          Easiest install (needs the GitHub CLI, skips the unverified-app prompt): \`gh api repos/${GITHUB_REPOSITORY}/contents/scripts/install.sh -H "Accept: application/vnd.github.raw" | bash\`
 
           Or unzip, drag Turbo.app to Applications, open it once, then System Settings → Privacy & Security → Open Anyway (it isn't notarized yet)."

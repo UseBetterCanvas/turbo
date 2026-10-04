@@ -1,19 +1,31 @@
 #!/usr/bin/env bash
 # Installs (or updates) Turbo into /Applications and launches it.
 #
-#   curl -fsSL https://raw.githubusercontent.com/UseBetterCanvas/turbo/main/scripts/install.sh | bash
+#   gh api repos/UseBetterCanvas/turbo/contents/scripts/install.sh -H "Accept: application/vnd.github.raw" | bash
 #
-# Downloading with curl skips the "downloaded from the internet" quarantine flag, so macOS
-# opens Turbo without the "Apple could not verify" prompt (Turbo isn't notarized yet).
+# The repo is private, so this uses the GitHub CLI (https://cli.github.com) to download.
+# Downloading from the command line also skips macOS's "Apple could not verify" prompt,
+# since only browser downloads get flagged as coming from the internet.
 set -euo pipefail
 
-URL="https://github.com/UseBetterCanvas/turbo/releases/download/latest-build/Turbo.zip"
+REPO="UseBetterCanvas/turbo"
 DEST="/Applications"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
+if ! command -v gh >/dev/null 2>&1; then
+  echo "Turbo installs with the GitHub CLI. Install it with: brew install gh"
+  echo "Then sign in with: gh auth login"
+  exit 1
+fi
+if ! gh auth status >/dev/null 2>&1; then
+  echo "Sign in to GitHub first: gh auth login"
+  exit 1
+fi
+
 echo "Downloading Turbo…"
-curl -fsSL "$URL" -o "$TMP/Turbo.zip"
+ASSET_ID="$(gh api "repos/$REPO/releases/tags/latest-build" --jq '.assets[] | select(.name == "Turbo.zip") | .id')"
+gh api "repos/$REPO/releases/assets/$ASSET_ID" -H "Accept: application/octet-stream" > "$TMP/Turbo.zip"
 ditto -x -k "$TMP/Turbo.zip" "$TMP"
 
 # Quit a running copy so it can be replaced.
@@ -31,4 +43,4 @@ fi
 xattr -dr com.apple.quarantine "$DEST/Turbo.app" 2>/dev/null || true
 
 open "$DEST/Turbo.app"
-echo "Turbo is running. Look for the flame in your menu bar."
+echo "Turbo is running. Look for the paw in your menu bar."
