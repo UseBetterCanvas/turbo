@@ -667,7 +667,7 @@ private struct SessionDetail: View {
         .task(id: session.lastActivityAt) {
             // For local Claude Code, read the agent's latest words straight from the transcript.
             guard let path = session.transcriptPath else { return }
-            let text = await Task.detached(priority: .utility) { ClaudeTranscript.lastAssistantText(atPath: path) }.value
+            let text = await Task.detached(priority: .utility) { ClaudeTranscript.lastAssistantText(atPath: path, currentTurnOnly: true) }.value
             // A newer activity restarted this task. Its read wins, not this older one.
             guard !Task.isCancelled else { return }
             latest = Format.snippet(text, limit: 200)

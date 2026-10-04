@@ -39,7 +39,9 @@ final class PopupPanel: NSPanel {
 
     override func keyDown(with event: NSEvent) {
         if event.keyCode == 53 { onEscape?(); return }
-        let plain = event.modifierFlags.intersection([.command, .control, .option]).isEmpty
+        // Typing in Search? Those keys are text, not triage.
+        let typing = firstResponder is NSText
+        let plain = !typing && event.modifierFlags.intersection([.command, .control, .option]).isEmpty
         if plain, onKey?(event.charactersIgnoringModifiers ?? "", event.keyCode) == true { return }
         super.keyDown(with: event)
     }

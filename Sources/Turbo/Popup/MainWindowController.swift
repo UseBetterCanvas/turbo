@@ -6,7 +6,9 @@ final class TurboWindow: NSWindow {
     var onKey: ((String, UInt16) -> Bool)?
 
     override func keyDown(with event: NSEvent) {
-        let plain = event.modifierFlags.intersection([.command, .control, .option]).isEmpty
+        // Typing in Search? Those keys are text, not triage.
+        let typing = firstResponder is NSText
+        let plain = !typing && event.modifierFlags.intersection([.command, .control, .option]).isEmpty
         if plain, onKey?(event.charactersIgnoringModifiers ?? "", event.keyCode) == true { return }
         super.keyDown(with: event)
     }
@@ -23,6 +25,7 @@ final class MainWindowController: NSObject, NSWindowDelegate {
     }
 
     var isOpen: Bool { window?.isVisible == true }
+    var isKey: Bool { window?.isKeyWindow == true }
 
     func show() {
         let window = self.window ?? makeWindow()

@@ -458,7 +458,7 @@ private struct SessionPane: View {
         }
         .task(id: session.lastActivityAt) {
             guard let path = session.transcriptPath else { return }
-            let text = await Task.detached(priority: .utility) { ClaudeTranscript.lastAssistantText(atPath: path) }.value
+            let text = await Task.detached(priority: .utility) { ClaudeTranscript.lastAssistantText(atPath: path, currentTurnOnly: true) }.value
             guard !Task.isCancelled else { return }
             latest = Format.snippet(text, limit: 600)
         }

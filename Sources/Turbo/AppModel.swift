@@ -666,6 +666,11 @@ final class AppModel: ObservableObject {
     }
 
     func dismiss(_ session: AgentSession) {
+        let wasSelected = selectedSessionID == session.id
+        defer {
+            // Showing it in full? Move on to the next one rather than an empty pane.
+            if wasSelected { selectedSessionID = board.all.first?.id }
+        }
         seen.remove(session.id)
         nudged.remove(session.id)
         store.remove(id: session.id)
@@ -809,6 +814,7 @@ final class AppModel: ObservableObject {
     /// ⌃⌥Space: open the board on whatever needs you, or close it.
     private func hotKeyPressed() {
         if popupOpen && popupPage == .home { closePopup(); return }
+        if windowOpen && mainWindow.isKey { mainWindow.close(); return }
         openPopup(preferences.hasOnboarded ? .home : .welcome)
     }
 

@@ -674,3 +674,20 @@ final class StopTests: XCTestCase {
     }
 }
 
+
+final class TranscriptTurnTests: XCTestCase {
+    func testCurrentTurnOnlyStopsAtTheLastPrompt() {
+        let lines = [
+            #"{"type":"user","message":{"role":"user","content":"first ask"}}"#,
+            #"{"type":"assistant","message":{"content":[{"type":"text","text":"old reply"}]}}"#,
+            #"{"type":"user","message":{"role":"user","content":"second ask"}}"#,
+            #"{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash"}]}}"#,
+            #"{"type":"user","message":{"content":[{"type":"tool_result","content":"ok"}]}}"#,
+        ].joined(separator: "\n")
+        let data = Data(lines.utf8)
+        XCTAssertEqual(ClaudeTranscript.lastAssistantText(inJSONL: data), "old reply")
+        XCTAssertNil(ClaudeTranscript.lastAssistantText(inJSONL: data, currentTurnOnly: true))
+        let answered = Data((lines + "\n" + #"{"type":"assistant","message":{"content":[{"type":"text","text":"new reply"}]}}"#).utf8)
+        XCTAssertEqual(ClaudeTranscript.lastAssistantText(inJSONL: answered, currentTurnOnly: true), "new reply")
+    }
+}
