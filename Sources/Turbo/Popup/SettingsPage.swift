@@ -464,9 +464,27 @@ private struct VisualizerSection: View {
 
 private struct GeneralSection: View {
     @EnvironmentObject private var model: AppModel
+    @EnvironmentObject private var prefs: Preferences
+
+    private var openHint: String {
+        guard prefs.openSessionsIn == .app else { return "Opens claude.ai or chatgpt.com in your browser." }
+        let claude = AppModel.appInstalled(for: .cloud)
+        let chatgpt = AppModel.appInstalled(for: .codexCloud)
+        switch (claude, chatgpt) {
+        case (true, true): return "Claude sessions open in the Claude app, Codex tasks in the ChatGPT app."
+        case (true, false): return "Claude sessions open in the Claude app. Codex tasks open in the browser (no ChatGPT app found)."
+        case (false, true): return "Codex tasks open in the ChatGPT app. Claude sessions open in the browser (no Claude app found)."
+        case (false, false): return "Neither the Claude nor the ChatGPT app is installed, so sessions open in the browser."
+        }
+    }
 
     var body: some View {
         SettingsGroup(title: "General") {
+            SettingRow(title: "Open cloud sessions in", detail: openHint) {
+                BCSegmented(options: OpenTarget.allCases.map { SegmentOption(value: $0, label: $0.title) }, selection: $prefs.openSessionsIn)
+                    .frame(width: 180)
+            }
+            RowDivider()
             ToggleRow(title: "Open at login", isOn: Binding(
                 get: { model.launchAtLogin },
                 set: { model.setLaunchAtLogin($0) }

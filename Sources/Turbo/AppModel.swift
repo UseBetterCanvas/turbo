@@ -99,6 +99,7 @@ final class AppModel: ObservableObject {
     private let codexTailer = SessionLogTailer(source: CodexRolloutSource())
     private let coworkTailer = SessionLogTailer(source: CoworkSessionSource())
     private var hoverTask: Task<Void, Never>?
+    private var expandRequested = false
     private var loops: [Task<Void, Never>] = []
     private var spotlightTask: Task<Void, Never>?
     private var island: IslandPanelController?
@@ -203,14 +204,18 @@ final class AppModel: ObservableObject {
         if preferences.watchCoworkSessions { coworkTailer.poll() }
     }
 
-    func setPointerInside(_ inside: Bool) {
-        guard inside != pointerInside else { return }
+    /// `expand: false` keeps the island as it is while the pointer is over a control on it
+    /// (the idle gear), so the control doesn't move away before it's clicked.
+    func setPointerInside(_ inside: Bool, expand: Bool = true) {
+        let wantsExpand = inside && expand
+        guard inside != pointerInside || wantsExpand != expandRequested else { return }
         pointerInside = inside
+        expandRequested = wantsExpand
         hoverTask?.cancel()
         hoverTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(nanoseconds: inside ? 140_000_000 : 260_000_000)
-            guard let self, !Task.isCancelled, self.pointerInside == inside else { return }
-            self.isHoveringIsland = inside
+            try? await Task.sleep(nanoseconds: wantsExpand ? 140_000_000 : 260_000_000)
+            guard let self, !Task.isCancelled, self.expandRequested == wantsExpand else { return }
+            self.isHoveringIsland = wantsExpand
         }
     }
 
@@ -366,7 +371,7 @@ final class AppModel: ObservableObject {
     /// Takes you to the session: its cloud page, or the app it runs in.
     func open(_ session: AgentSession) {
         if let link = session.link {
-            NSWorkspace.shared.open(link)
+            openLink(link, for: session.agent)
             return
         }
         guard let bundleID = session.hostAppBundleID,
@@ -376,6 +381,56 @@ final class AppModel: ObservableObject {
         } else {
             app.activate(options: [.activateIgnoringOtherApps])
         }
+    }
+
+    static let claudeAppBundleID = "com.anthropic.claudefordesktop"
+    static let chatGPTAppBundleID = "com.openai.chat"
+
+    /// Whether Open can use the app for this kind of session (the same check Open uses).
+    static func appInstalled(for agent: Agent) -> Bool {
+        if agent == .codexCloud {
+            return NSWorkspace.shared.urlForApplication(withBundleIdentifier: chatGPTAppBundleID) != nil
+        }
+        return claudeAppLink(for: URL(string: "https://claude.ai/code")!) != nil
+    }
+
+    /// The Claude app link for a claude.ai page, but only if the Claude app is the one that
+    /// handles claude:// (not some other app that registered the scheme). Code sessions use the
+    /// documented `claude://code/{session-id}` route; other pages keep their claude.ai path.
+    static func claudeAppLink(for link: URL) -> URL? {
+        let parts = link.pathComponents.filter { $0 != "/" }
+        let deepString: String
+        if parts.first == "code" {
+            deepString = parts.count > 1 ? "claude://code/" + parts[1] : "claude://code"
+        } else {
+            deepString = "claude://claude.ai" + link.path
+        }
+        guard let deep = URL(string: deepString),
+              let handler = NSWorkspace.shared.urlForApplication(toOpen: deep),
+              Bundle(url: handler)?.bundleIdentifier == claudeAppBundleID else { return nil }
+        return deep
+    }
+
+    /// Opens a session's page in the Claude/ChatGPT app or the browser, per the preference.
+    private func openLink(_ link: URL, for agent: Agent) {
+        if preferences.openSessionsIn == .app {
+            switch agent {
+            case .codexCloud:
+                if let app = NSWorkspace.shared.urlForApplication(withBundleIdentifier: Self.chatGPTAppBundleID) {
+                    NSWorkspace.shared.open([link], withApplicationAt: app, configuration: NSWorkspace.OpenConfiguration()) { _, error in
+                        // If the app can't take it, the browser still gets you there.
+                        if error != nil { DispatchQueue.main.async { NSWorkspace.shared.open(link) } }
+                    }
+                    return
+                }
+            default:
+                if let deep = Self.claudeAppLink(for: link) {
+                    NSWorkspace.shared.open(deep)
+                    return
+                }
+            }
+        }
+        NSWorkspace.shared.open(link)
     }
 
     func focusHost(of session: AgentSession) {

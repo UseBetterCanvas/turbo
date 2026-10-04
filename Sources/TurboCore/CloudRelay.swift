@@ -62,11 +62,11 @@ public enum CloudRelay {
         return """
         # --- Turbo: ping your Mac's Dynamic Island when cloud sessions finish ---
         mkdir -p ~/.claude
-        cat > ~/.claude/\(marker).sh <<'CLIPPY_RELAY'
+        cat > ~/.claude/\(marker).sh <<'TURBO_RELAY'
         \(relayScript(channel: channel, server: server))
-        CLIPPY_RELAY
+        TURBO_RELAY
         chmod +x ~/.claude/\(marker).sh
-        python3 - <<'CLIPPY_SETTINGS'
+        python3 - <<'TURBO_SETTINGS'
         import json, os
         path = os.path.expanduser("~/.claude/settings.json")
         try:
@@ -82,7 +82,7 @@ public enum CloudRelay {
             groups.append(group)
             hooks[event] = groups
         json.dump(settings, open(path, "w"), indent=2)
-        CLIPPY_SETTINGS
+        TURBO_SETTINGS
         # --- end Turbo ---
         """
     }
