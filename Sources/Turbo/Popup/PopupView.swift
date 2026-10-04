@@ -49,7 +49,7 @@ private struct PopupClip: Shape {
 
     func path(in rect: CGRect) -> Path {
         if docked {
-            return NotchShape(topRadius: open ? 16 : 6, bottomRadius: open ? DS.Radius.dialog : 10).path(in: rect)
+            return NotchShape(topRadius: open ? PopupLayout.notchInset : 6, bottomRadius: open ? DS.Radius.dialog : 10).path(in: rect)
         }
         return RoundedRectangle(cornerRadius: open ? DS.Radius.dialog : rect.height / 2, style: .continuous).path(in: rect)
     }
@@ -93,7 +93,10 @@ private struct PopupContent: View {
             if geometry.docked {
                 Color.black.frame(height: geometry.notchSize.height)
             }
+            // The notch shape curls in at the top corners and narrows the body by its radius on
+            // each side, so keep the content inside that.
             MainView(host: .popup)
+                .padding(.horizontal, geometry.docked ? PopupLayout.notchInset : 0)
         }
     }
 }
@@ -118,4 +121,9 @@ private struct HeaderButton: View {
         .onHover { hovering = $0 }
         .animation(hovering ? nil : DS.Motion.out, value: hovering)
     }
+}
+
+enum PopupLayout {
+    /// The top-corner curl of the docked pop-up, which is also how far its body is inset.
+    static let notchInset: CGFloat = 16
 }
