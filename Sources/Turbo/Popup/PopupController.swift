@@ -58,9 +58,9 @@ final class PopupState: ObservableObject {
 /// The third of Turbo's three shapes: the pop-up that grows out of the notch.
 @MainActor
 final class PopupController {
-    static let size = CGSize(width: 800, height: 560)
+    static let size = CGSize(width: 900, height: 580)
     /// Room around the pop-up for its shadow.
-    static let canvas = CGSize(width: 880, height: 640)
+    static let canvas = CGSize(width: 980, height: 660)
 
     private let model: AppModel
     private let panel = PopupPanel()

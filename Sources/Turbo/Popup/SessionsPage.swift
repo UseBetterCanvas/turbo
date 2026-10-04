@@ -210,7 +210,7 @@ struct SessionRowView: View {
 }
 
 /// Shown on the board when a new version is ready.
-private struct UpdateBanner: View {
+struct UpdateBanner: View {
     @ObservedObject var updater: Updater
 
     var body: some View {
@@ -275,7 +275,7 @@ private struct UpdateBanner: View {
 }
 
 /// A slim one-line prompt until something is connected.
-private struct SetupBanner: View {
+struct SetupBanner: View {
     @EnvironmentObject private var model: AppModel
 
     var body: some View {

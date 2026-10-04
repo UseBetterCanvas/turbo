@@ -35,19 +35,23 @@ struct NotchGeometry: Equatable {
 enum IslandLayout {
     /// The panel is a fixed transparent canvas; the island draws inside it.
     /// Tall enough for the biggest shape: a full list with a detail open, under the notch.
-    static let canvasSize = CGSize(width: 680, height: 520)
+    static let canvasSize = CGSize(width: 680, height: 640)
     static let compactSideWidth: CGFloat = 76
     static let idleSideWidth: CGFloat = 34
     static let floatingIdleSize = CGSize(width: 86, height: 30)
-    static let listFooterHeight: CGFloat = 40
-    static let listHeadlineHeight: CGFloat = 26
+    static let listFooterHeight: CGFloat = 50
+
+    /// Floating, the list's Quiet and Settings buttons need a row of their own.
+    static func listTopBarHeight(_ geometry: NotchGeometry) -> CGFloat {
+        geometry.docked ? 0 : 36
+    }
     /// Extra room when a session's details are open in the hover list.
     static let detailHeight: CGFloat = 132
     static let floatingCompactWidth: CGFloat = 248
     static let floatingCompactHeight: CGFloat = 38
     static let floatingGap: CGFloat = 6
-    static let cardWidth: CGFloat = 404
-    static let rowHeight: CGFloat = 46
+    static let cardWidth: CGFloat = 470
+    static let rowHeight: CGFloat = 60
     static let maxRows = 5
     /// The line a tiny island grows to show the step a session just moved on to.
     static let peekHeight: CGFloat = 24
@@ -99,7 +103,7 @@ enum IslandLayout {
             return CGSize(width: cardWidth, height: headroom(geometry) + (card.kind == .needsInput ? 122 : 104))
         case .list:
             let count = CGFloat(min(max(rows, 1), maxRows))
-            return CGSize(width: cardWidth, height: headroom(geometry) + listHeadlineHeight + count * rowHeight + (detail ? detailHeight : 0) + 10 + listFooterHeight)
+            return CGSize(width: cardWidth, height: headroom(geometry) + 4 + listTopBarHeight(geometry) + count * rowHeight + (detail ? detailHeight : 0) + 6 + listFooterHeight)
         }
     }
 
