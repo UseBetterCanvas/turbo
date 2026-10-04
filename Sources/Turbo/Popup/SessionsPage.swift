@@ -170,7 +170,7 @@ struct SessionRowView: View {
         switch session.phase {
         case .needsInput: return DS.Palette.gold
         case .cooking: return DS.Palette.brandText
-        case .done: return DS.Palette.ok
+        case .done: return session.failed ? DS.Palette.bad : DS.Palette.ok
         case .idle: return DS.Palette.textTertiary
         }
     }
@@ -185,10 +185,11 @@ struct SessionRowView: View {
             if let start = session.turnStartedAt { parts.append(Format.clock(now.timeIntervalSince(start))) }
             if let tool = session.lastTool { parts.append(tool) }
         case .done:
-            if let duration = session.cookDuration { parts.append("cooked in \(Format.duration(duration))") }
+            if session.failed { parts.append("Failed") }
+            if let duration = session.cookDuration { parts.append("\(session.failed ? "ran for" : "cooked in") \(Format.duration(duration))") }
             if let summary = Format.snippet(session.summary, limit: 80) { parts.append(summary) }
         case .idle:
-            break
+            parts.append("Idle")
         }
         return parts.joined(separator: " · ")
     }

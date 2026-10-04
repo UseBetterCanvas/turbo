@@ -21,10 +21,26 @@ final class CodexCloudPoller {
     private let queue = DispatchQueue(label: "turbo.codex-cloud")
     private var timer: DispatchSourceTimer?
     private var running = false
+    /// Bumped by start/stop so a poll that finishes after watching changed is thrown away.
+    private var generation = 0
+    private let lock = NSLock()
+
+    private var currentGeneration: Int {
+        lock.lock(); defer { lock.unlock() }
+        return generation
+    }
+
+    private func bumpGeneration() -> Int {
+        lock.lock(); defer { lock.unlock() }
+        generation += 1
+        return generation
+    }
 
     func start(every interval: TimeInterval = 20) {
         stop()
-        publish(.checking)
+        let gen = bumpGeneration()
+        queue.async { [tracker] in tracker.reset() }
+        publish(.checking, generation: gen)
         let timer = DispatchSource.makeTimerSource(queue: queue)
         timer.schedule(deadline: .now(), repeating: interval, leeway: .seconds(2))
         timer.setEventHandler { [weak self] in self?.poll() }
@@ -35,7 +51,8 @@ final class CodexCloudPoller {
     func stop() {
         timer?.cancel()
         timer = nil
-        publish(.off)
+        let gen = bumpGeneration()
+        publish(.off, generation: gen)
     }
 
     /// Checks right away (used by the "Check Now" button).
@@ -47,22 +64,47 @@ final class CodexCloudPoller {
         guard !running else { return }
         running = true
         defer { running = false }
+        let gen = currentGeneration
 
-        let result = Self.runInLoginShell(Self.findCodex + "codex cloud list --json --limit 20", timeout: 20)
-        switch result {
+        switch Self.list(cursor: nil) {
         case let .success(output):
-            guard let tasks = CodexCloud.parseList(output.stdout) else {
-                publish(Self.classify(output))
+            guard let page = CodexCloud.parsePage(output.stdout) else {
+                publish(Self.classify(output), generation: gen)
                 return
             }
+            var tasks = page.tasks
+            // A task we saw running may have been pushed past the first page by newer ones.
+            // Follow the cursor a little way so its finish isn't missed.
+            var cursor = page.cursor
+            var extraPages = 0
+            while !tracker.activeIDs(missingFrom: tasks).isEmpty, let next = cursor, extraPages < 3 {
+                guard case let .success(more) = Self.list(cursor: next), let nextPage = CodexCloud.parsePage(more.stdout) else { break }
+                tasks += nextPage.tasks
+                cursor = nextPage.cursor
+                extraPages += 1
+            }
+            guard gen == currentGeneration else { return }
             let events = tracker.update(with: tasks)
-            publish(.watching(tasks.count))
+            publish(.watching(page.tasks.count), generation: gen)
             if !events.isEmpty, let onEvents {
-                Task { @MainActor in onEvents(events) }
+                Task { @MainActor [weak self] in
+                    guard let self, gen == self.currentGeneration else { return }
+                    onEvents(events)
+                }
             }
         case let .failure(message):
-            publish(.failed(message))
+            publish(.failed(message), generation: gen)
         }
+    }
+
+    private static func list(cursor: String?) -> ShellResult {
+        var command = findCodex + "exec codex cloud list --json --limit 20"
+        if let cursor { command += " --cursor " + shellQuote(cursor) }
+        return runInLoginShell(command, timeout: 20)
+    }
+
+    static func shellQuote(_ s: String) -> String {
+        "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
 
     private static func classify(_ output: ShellOutput) -> State {
@@ -78,15 +120,19 @@ final class CodexCloudPoller {
         return .failed(String(firstLine.prefix(140)))
     }
 
-    private func publish(_ state: State) {
-        guard let onState else { return }
-        Task { @MainActor in onState(state) }
+    private func publish(_ state: State, generation gen: Int) {
+        guard let onState, gen == currentGeneration else { return }
+        Task { @MainActor [weak self] in
+            guard let self, gen == self.currentGeneration else { return }
+            onState(state)
+        }
     }
 
     // MARK: Shell
 
     /// Login shells don't always load nvm or npm paths, so add the usual install spots.
-    static let findCodex = #"PATH="$PATH:/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$HOME/.npm-global/bin:$HOME/.bun/bin:$HOME/.volta/bin"; for d in "$HOME"/.nvm/versions/node/*/bin; do [ -d "$d" ] && PATH="$PATH:$d"; done; export PATH; "#
+    /// The nvm lookup runs under /bin/sh, where an unmatched glob is harmless (zsh would error).
+    static let findCodex = #"PATH="$PATH:/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$HOME/.npm-global/bin:$HOME/.bun/bin:$HOME/.volta/bin$(/bin/sh -c 'for d in "$HOME"/.nvm/versions/node/*/bin; do [ -d "$d" ] && printf ":%s" "$d"; done')"; export PATH; "#
 
     struct ShellOutput {
         var status: Int32
@@ -127,7 +173,16 @@ final class CodexCloudPoller {
         let deadline = DispatchTime.now() + timeout
         while process.isRunning {
             if DispatchTime.now() > deadline {
+                // Commands end in `exec`, so the shell *is* the slow process: terminating it
+                // stops the work. Then make sure it's gone and the readers are released.
                 process.terminate()
+                let killAt = DispatchTime.now() + 2
+                while process.isRunning && DispatchTime.now() < killAt { Thread.sleep(forTimeInterval: 0.05) }
+                if process.isRunning { kill(process.processIdentifier, SIGKILL) }
+                process.waitUntilExit()
+                try? out.fileHandleForReading.close()
+                try? err.fileHandleForReading.close()
+                _ = group.wait(timeout: .now() + 1)
                 return .failure("codex took too long to answer")
             }
             Thread.sleep(forTimeInterval: 0.1)

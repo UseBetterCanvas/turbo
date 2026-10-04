@@ -16,10 +16,11 @@ The repo is private, so installs go through the [GitHub CLI](https://cli.github.
 Silicon and Intel):
 
 ```sh
-gh api repos/UseBetterCanvas/turbo/contents/scripts/install.sh -H "Accept: application/vnd.github.raw" | bash
+gh api repos/UseBetterCanvas/turbo/contents/scripts/install.sh -H "Accept: application/vnd.github.raw" > /tmp/turbo-install.sh && bash /tmp/turbo-install.sh
 ```
 
-It installs Turbo into Applications and opens it. Run it again any time to update.
+It installs Turbo into Applications and opens it. After that, update from inside the app:
+Settings → Updates → **Update**.
 Look for the paw in your menu bar.
 
 Prefer the browser? While signed into GitHub, download **Turbo.zip** from the

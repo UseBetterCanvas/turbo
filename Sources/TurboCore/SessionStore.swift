@@ -30,6 +30,8 @@ public struct AgentSession: Identifiable, Equatable, Sendable {
     public var hostAppBundleID: String?
     public var title: String?
     public var link: URL?
+    /// The last turn ended in an error or was cancelled (shown as failed, not done).
+    public var failed = false
 
     public init(agent: Agent, sessionID: String, cwd: String? = nil, lastActivityAt: Date) {
         self.agent = agent
@@ -142,15 +144,19 @@ public final class SessionStore {
             s.phase = .needsInput(message: message)
             changes.append(.needsInput(s))
 
-        case let .turnComplete(summary):
+        case let .turnComplete(summary), let .turnFailed(summary):
             s.lastActivityAt = now
+            let failed: Bool
+            if case .turnFailed = event.kind { failed = true } else { failed = false }
             if case let .done(existing) = s.phase, let finished = s.finishedAt, now.timeIntervalSince(finished) < doneGrace {
                 // Duplicate report of the same turn; just fill in a summary if we didn't have one.
                 if existing == nil, let summary { s.phase = .done(summary: summary) }
+                if failed { s.failed = true }
             } else {
                 if !s.phase.isActive { s.turnStartedAt = nil }
                 s.phase = .done(summary: summary)
                 s.finishedAt = now
+                s.failed = failed
                 changes.append(.finished(s))
             }
 
@@ -204,6 +210,7 @@ public final class SessionStore {
         s.finishedAt = nil
         s.beats = 0
         s.lastTool = nil
+        s.failed = false
     }
 
     private func resolveKey(for event: AgentEvent) -> String {

@@ -56,7 +56,7 @@ struct VisualizerView: View {
                     .id(toast)
             }
 
-            if let spotlight = model.spotlight, spotlight.kind == .finished {
+            if let spotlight = model.spotlight, spotlight.kind == .finished, !spotlight.session.failed {
                 FinaleOverlay(session: spotlight.session)
                     .transition(.opacity.combined(with: .scale(scale: 1.08)))
             }

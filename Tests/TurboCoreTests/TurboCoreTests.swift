@@ -168,19 +168,42 @@ final class CodexCloudTests: XCTestCase {
         XCTAssertEqual(CodexCloud.Phase(status: "weird"), .unknown)
     }
 
-    func testTrackerOnlyAnnouncesChanges() {
+    func testTrackerOnlyAnnouncesTransitions() {
         let tracker = CodexCloud.Tracker()
+        func poll(_ tasks: [(String, String, String)]) -> [AgentEventKind] {
+            tracker.update(with: CodexCloud.parseList(json(tasks))!).map(\.kind)
+        }
         // First poll: the running task appears, the old finished one stays quiet.
-        let first = tracker.update(with: CodexCloud.parseList(json([("t1", "running", "1"), ("old", "ready", "0")]))!)
-        XCTAssertEqual(first.map(\.kind), [.promptSubmitted])
-        XCTAssertEqual(first.first?.agent, .codexCloud)
-        XCTAssertEqual(first.first?.title, "Fix t1")
-        // Nothing changed.
-        XCTAssertTrue(tracker.update(with: CodexCloud.parseList(json([("t1", "running", "1"), ("old", "ready", "0")]))!).isEmpty)
-        // Progress tick, then it finishes, and a new one starts.
-        XCTAssertEqual(tracker.update(with: CodexCloud.parseList(json([("t1", "running", "2")]))!).map(\.kind), [.activity(tool: nil)])
-        let last = tracker.update(with: CodexCloud.parseList(json([("t1", "ready", "3"), ("t2", "pending", "3")]))!)
-        XCTAssertEqual(last.map(\.kind), [.turnComplete(summary: "did t1"), .promptSubmitted])
+        XCTAssertEqual(poll([("t1", "running", "1"), ("old", "ready", "0")]), [.promptSubmitted])
+        // Still running with no changes: a heartbeat, so long tasks never look stale.
+        XCTAssertEqual(poll([("t1", "running", "1"), ("old", "ready", "0")]), [.activity(tool: nil)])
+        // It finishes and a new one starts.
+        XCTAssertEqual(poll([("t1", "ready", "3"), ("t2", "pending", "3")]), [.turnComplete(summary: "did t1"), .promptSubmitted])
+        // ready → applied is not a second completion.
+        XCTAssertEqual(poll([("t1", "applied", "4"), ("t2", "running", "4")]), [.activity(tool: nil)])
+        // A failure is reported as a failure.
+        XCTAssertEqual(poll([("t2", "error", "5")]), [.turnFailed(summary: "did t2")])
+        // A finished task first seen late doesn't get announced.
+        XCTAssertEqual(poll([("late", "completed", "6")]), [])
+    }
+
+    func testMissingActiveTasksAndReset() {
+        let tracker = CodexCloud.Tracker()
+        _ = tracker.update(with: CodexCloud.parseList(json([("t1", "running", "1"), ("t2", "ready", "1")]))!)
+        XCTAssertEqual(tracker.activeIDs(missingFrom: CodexCloud.parseList(json([("t3", "running", "2")]))!), ["t1"])
+        tracker.reset()
+        // After a reset the finished task is "first seen" again, so it stays quiet.
+        XCTAssertEqual(tracker.update(with: CodexCloud.parseList(json([("t1", "ready", "3")]))!).map(\.kind), [])
+    }
+
+    func testFailedTurnMarksSession() {
+        let store = SessionStore()
+        store.apply(AgentEvent(agent: .codexCloud, sessionID: "x", kind: .promptSubmitted))
+        guard case let .finished(s) = store.apply(AgentEvent(agent: .codexCloud, sessionID: "x", kind: .turnFailed(summary: "boom"))).first else { return XCTFail() }
+        XCTAssertTrue(s.failed)
+        XCTAssertEqual(s.summary, "boom")
+        guard case let .started(again) = store.apply(AgentEvent(agent: .codexCloud, sessionID: "x", kind: .promptSubmitted, date: Date().addingTimeInterval(60))).first else { return XCTFail() }
+        XCTAssertFalse(again.failed)
     }
 
     func testTrackerFeedsStore() {
