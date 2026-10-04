@@ -394,12 +394,18 @@ final class AppModel: ObservableObject {
         return claudeAppLink(for: URL(string: "https://claude.ai/code")!) != nil
     }
 
-    /// The claude:// version of a claude.ai link, but only if the Claude app is the one that
-    /// handles claude:// (not some other app that registered the scheme).
+    /// The Claude app link for a claude.ai page, but only if the Claude app is the one that
+    /// handles claude:// (not some other app that registered the scheme). Code sessions use the
+    /// documented `claude://code/{session-id}` route; other pages keep their claude.ai path.
     static func claudeAppLink(for link: URL) -> URL? {
-        var components = URLComponents(url: link, resolvingAgainstBaseURL: false)
-        components?.scheme = "claude"
-        guard let deep = components?.url,
+        let parts = link.pathComponents.filter { $0 != "/" }
+        let deepString: String
+        if parts.first == "code" {
+            deepString = parts.count > 1 ? "claude://code/" + parts[1] : "claude://code"
+        } else {
+            deepString = "claude://claude.ai" + link.path
+        }
+        guard let deep = URL(string: deepString),
               let handler = NSWorkspace.shared.urlForApplication(toOpen: deep),
               Bundle(url: handler)?.bundleIdentifier == claudeAppBundleID else { return nil }
         return deep
