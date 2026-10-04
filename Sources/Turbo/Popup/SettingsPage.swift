@@ -249,8 +249,40 @@ private struct ClaudeLocalDetails: View {
     @EnvironmentObject private var model: AppModel
     let onDisconnect: () -> Void
     @State private var test: TestState = .idle
+    @State private var approvals = Integrations.isClaudeApprovalInstalled
+    @State private var error: String?
 
     var body: some View {
+        VStack(alignment: .leading, spacing: DS.Space.s) {
+            HStack(spacing: DS.Space.s) {
+                Image(systemName: approvals ? "checkmark.circle.fill" : "hand.raised")
+                    .foregroundStyle(approvals ? DS.Palette.ok : DS.Palette.textSecondary)
+                Text(approvals
+                     ? "Approve from Turbo is on. Permission prompts show Allow / Deny in the island when you're not in the terminal."
+                     : "Approve permission prompts from the island instead of the terminal.")
+                    .font(DS.Typography.caption)
+                    .foregroundStyle(DS.Palette.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: DS.Space.s)
+                if !approvals {
+                    Button("Turn On") {
+                        do {
+                            try Integrations.installClaude()
+                            approvals = Integrations.isClaudeApprovalInstalled
+                            error = nil
+                        } catch {
+                            self.error = "Couldn't update Claude Code's settings: \(error.localizedDescription)"
+                        }
+                    }
+                    .buttonStyle(PrimaryButtonStyle())
+                }
+            }
+            if let error { Text(error).font(DS.Typography.caption).foregroundStyle(DS.Palette.bad) }
+            testRow
+        }
+    }
+
+    private var testRow: some View {
         HStack(spacing: DS.Space.s) {
             Button(test == .running ? "Testing…" : "Test Connection") {
                 Task {

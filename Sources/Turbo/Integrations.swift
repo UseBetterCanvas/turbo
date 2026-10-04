@@ -27,6 +27,11 @@ enum Integrations {
             || NSWorkspace.shared.urlForApplication(withBundleIdentifier: CoworkSessionSource.desktopBundleID) != nil
     }
 
+    /// The PermissionRequest hook that lets you Allow / Deny from Turbo.
+    static var isClaudeApprovalInstalled: Bool {
+        HookInstaller.isClaudeApprovalInstalled(try? Data(contentsOf: claudeSettingsURL))
+    }
+
     static var isClaudeInstalled: Bool {
         HookInstaller.isClaudeInstalled(try? Data(contentsOf: claudeSettingsURL))
     }
