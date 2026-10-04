@@ -595,8 +595,6 @@ struct UpdateRow: View {
                 ProgressView().controlSize(.small)
             case .needsAccess:
                 HStack(spacing: DS.Space.s) {
-                    Button("Copy Sign-In Command") { copy("brew install gh && gh auth login") }
-                        .buttonStyle(SecondaryButtonStyle())
                     Button("Check Again") { Task { await updater.check() } }
                         .buttonStyle(SecondaryButtonStyle())
                 }
@@ -621,7 +619,7 @@ struct UpdateRow: View {
         case .available: return "A new version is ready. Turbo will reopen after updating."
         case .downloading: return "Downloading…"
         case .installing: return "Installing. Turbo will reopen in a moment."
-        case .needsAccess: return "Turbo's repo is private. Sign in to GitHub in Terminal once, then check again."
+        case .needsAccess: return "Couldn't reach Turbo's releases on GitHub. Check your connection, then try again."
         case let .manualInstall(message): return message
         case .translocated: return "macOS is running Turbo from a temporary copy, so it can't update itself. Fix it once and Turbo reopens from Applications."
         case let .failed(message): return message

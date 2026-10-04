@@ -84,10 +84,10 @@ jobs:
           cat > notes.md <<'NOTES'
           Built from __REF__ @ __SHA__ (build __RUN__).
 
-          **Install or update** (needs the GitHub CLI):
+          **Install or update** (paste in Terminal):
 
           ```sh
-          bash <(gh api repos/__REPO__/contents/scripts/install.sh -H "Accept: application/vnd.github.raw")
+          curl -fsSL https://raw.githubusercontent.com/__REPO__/main/scripts/install.sh | bash
           ```
 
           __OPEN_NOTE__
