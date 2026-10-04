@@ -477,6 +477,7 @@ private struct SessionList: View {
             // Chips on the left, and the way into the full pop-up on the right.
             HStack(spacing: 8) {
                 ConnectedAgentsChip()
+                UpdateChip(updater: model.updater)
                 ChipButton(action: { model.openVisualizer() }) {
                     Image(systemName: "sparkles").font(.system(size: 11, weight: .semibold))
                     Text("Visualizer")

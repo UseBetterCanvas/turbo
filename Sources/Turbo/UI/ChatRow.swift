@@ -218,3 +218,66 @@ struct ConnectedAgentsChip: View {
         return list
     }
 }
+
+/// A Blurple "Update" pill that appears in the island when a new version is ready, so it's
+/// one click from anywhere. Also covers the one-time "Fix and Relaunch".
+struct UpdateChip: View {
+    @ObservedObject var updater: Updater
+    @State private var hovering = false
+
+    var body: some View {
+        if let item = content {
+            Button(action: item.action) {
+                HStack(spacing: 5) {
+                    if busy {
+                        ProgressView().controlSize(.mini).tint(.white)
+                    } else {
+                        Image(systemName: item.symbol).font(.system(size: 11, weight: .bold))
+                    }
+                    Text(item.title)
+                }
+                .font(DSFont.sans(12, .bold))
+                .foregroundStyle(.white)
+                .padding(.horizontal, 11)
+                .frame(height: 28)
+                .background(Capsule().fill(DS.Palette.brand.opacity(hovering ? 1 : 0.9)))
+                .contentShape(Capsule())
+            }
+            .buttonStyle(PressableStyle())
+            .disabled(busy)
+            .onHover { hovering = $0 }
+            .help(help)
+            .transition(.scale(scale: 0.9).combined(with: .opacity))
+        }
+    }
+
+    private var busy: Bool {
+        switch updater.state {
+        case .downloading, .installing: return true
+        default: return false
+        }
+    }
+
+    private var help: String {
+        if case .translocated = updater.state { return "macOS is running a temporary copy. Fix it once so updates can land." }
+        return "Install the new version. Turbo reopens in a moment."
+    }
+
+    private var content: (title: String, symbol: String, action: () -> Void)? {
+        switch updater.state {
+        case .available:
+            return ("Update", "arrow.down.circle.fill", { Task { await updater.install() } })
+        case .downloading:
+            return ("Downloading", "arrow.down.circle.fill", {})
+        case .installing:
+            return ("Installing", "arrow.down.circle.fill", {})
+        case .translocated:
+            return ("Fix & Relaunch", "wrench.and.screwdriver.fill", { updater.fixTranslocation() })
+        default:
+            if updater.installError != nil {
+                return ("Retry Update", "arrow.clockwise", { Task { await updater.retryInstall() } })
+            }
+            return nil
+        }
+    }
+}
