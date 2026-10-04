@@ -39,7 +39,9 @@ final class PopupPanel: NSPanel {
 
     override func keyDown(with event: NSEvent) {
         if event.keyCode == 53 { onEscape?(); return }
-        let plain = event.modifierFlags.intersection([.command, .control, .option]).isEmpty
+        // Typing in Search? Those keys are text, not triage.
+        let typing = firstResponder is NSText
+        let plain = !typing && event.modifierFlags.intersection([.command, .control, .option]).isEmpty
         if plain, onKey?(event.charactersIgnoringModifiers ?? "", event.keyCode) == true { return }
         super.keyDown(with: event)
     }
@@ -58,9 +60,9 @@ final class PopupState: ObservableObject {
 /// The third of Turbo's three shapes: the pop-up that grows out of the notch.
 @MainActor
 final class PopupController {
-    static let size = CGSize(width: 800, height: 560)
+    static let size = CGSize(width: 900, height: 580)
     /// Room around the pop-up for its shadow.
-    static let canvas = CGSize(width: 880, height: 640)
+    static let canvas = CGSize(width: 980, height: 660)
 
     private let model: AppModel
     private let panel = PopupPanel()

@@ -69,9 +69,15 @@ struct IslandView: View {
                 .transition(.blurFade)
                 .id(spotlight.session.id + "\(spotlight.kind)")
         case .list:
-            SessionList(sessions: model.board.all)
-                .padding(.top, IslandLayout.headroom(geometry) + 6)
-                .transition(.blurFade)
+            ZStack(alignment: .top) {
+                SessionList(sessions: model.board.all, geometry: geometry)
+                    .padding(.top, IslandLayout.headroom(geometry) + 4)
+                // Docked, the controls sit in the strip beside the notch.
+                if geometry.docked {
+                    ListTopBar(geometry: geometry).frame(height: IslandLayout.headroom(geometry))
+                }
+            }
+            .transition(.blurFade)
         }
     }
 }
@@ -423,35 +429,28 @@ private struct SpotlightCard: View {
 private struct SessionList: View {
     @EnvironmentObject private var model: AppModel
     let sessions: [AgentSession]
+    let geometry: NotchGeometry
 
     var body: some View {
         VStack(spacing: 0) {
+            // Floating (no notch to sit beside), the controls get their own row.
+            if !geometry.docked {
+                ListTopBar(geometry: geometry).frame(height: IslandLayout.listTopBarHeight(geometry))
+            }
             TimelineView(.periodic(from: .now, by: 1)) { context in
                 VStack(spacing: 0) {
-                    // One line: what's going on right now.
-                    Text(headline(for: model.board, now: context.date))
-                        .font(DSFont.sans(12, .semibold).monospacedDigit())
-                        .foregroundStyle(Color.white.opacity(0.85))
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 8)
-                        .frame(height: IslandLayout.listHeadlineHeight)
                     if sessions.isEmpty {
-                        HStack(spacing: 10) {
-                            Image(systemName: "pawprint.fill")
-                                .font(.system(size: 14))
-                                .foregroundStyle(Color.white.opacity(0.5))
-                                .frame(width: 26)
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text("Nothing cooking").font(DSFont.sans(12.5, .bold)).foregroundStyle(.white)
+                        HStack(spacing: 12) {
+                            AppIconView(size: 40)
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text("Nothing cooking").font(DSFont.sans(14, .bold)).foregroundStyle(.white)
                                 Text("Start a session and it'll show up here.")
-                                    .font(DSFont.sans(11, .medium))
-                                    .foregroundStyle(Color.white.opacity(0.55))
+                                    .font(DSFont.sans(12.5, .medium))
+                                    .foregroundStyle(DS.Palette.textSecondary)
                             }
                             Spacer(minLength: 0)
                         }
-                        .padding(.horizontal, 8)
+                        .padding(.horizontal, 10)
                         .frame(height: IslandLayout.rowHeight)
                         .staggered(0)
                     }
@@ -459,14 +458,10 @@ private struct SessionList: View {
                     ScrollView(.vertical, showsIndicators: sessions.count > IslandLayout.maxRows) {
                         VStack(spacing: 0) {
                             ForEach(Array(sessions.enumerated()), id: \.element.id) { index, session in
-                                HoverRow {
-                                    SessionRow(session: session, now: context.date)
-                                } action: {
-                                    model.open(session)
-                                }
-                                .frame(height: IslandLayout.rowHeight)
-                                .onHover { inside in hoverRow(session, inside) }
-                                .staggered(index)
+                                IslandChatRow(session: session, now: context.date, divider: index > 0)
+                                    .frame(height: IslandLayout.rowHeight)
+                                    .onHover { inside in hoverRow(session, inside) }
+                                    .staggered(index)
                                 if model.detailSessionID == session.id {
                                     SessionDetail(session: session)
                                         .frame(height: IslandLayout.detailHeight)
@@ -480,24 +475,96 @@ private struct SessionList: View {
                 }
             }
 
-            // Everything else is one click away.
-            HStack(spacing: 6) {
-                IslandFooterButton(symbol: "rectangle.expand.vertical", title: sessions.count > IslandLayout.maxRows ? "All \(sessions.count) sessions" : "Open Turbo") {
-                    model.openPopup(.home)
+            // Chips on the left, and the way into the full pop-up on the right.
+            HStack(spacing: 8) {
+                ConnectedAgentsChip()
+                ChipButton(action: { model.openVisualizer() }) {
+                    Image(systemName: "sparkles").font(.system(size: 11, weight: .semibold))
+                    Text("Visualizer")
                 }
                 Spacer()
-                IslandFooterButton(symbol: "sparkles", title: "Visualizer") {
-                    model.openVisualizer()
+                if sessions.count > IslandLayout.maxRows {
+                    Text("\(sessions.count) sessions")
+                        .font(DSFont.sans(11.5, .semibold))
+                        .foregroundStyle(DS.Palette.textTertiary)
                 }
-                IslandFooterButton(symbol: "gearshape", title: "Settings") {
-                    model.openPopup(.settings)
+                RoundIconButton(symbol: "arrow.up.left.and.arrow.down.right", help: "Open Turbo", size: 34, outlined: true) {
+                    model.openPopup(.home)
                 }
             }
-            .frame(height: IslandLayout.listFooterHeight - 6)
-            .padding(.top, 2)
+            .padding(.horizontal, 6)
+            .frame(height: IslandLayout.listFooterHeight)
             .staggered(min(sessions.count, IslandLayout.maxRows) + 1)
         }
+        .padding(.horizontal, 12)
+    }
+}
+
+/// Quiet and Settings, tucked beside the notch like HeyClicky's.
+private struct ListTopBar: View {
+    @EnvironmentObject private var model: AppModel
+    let geometry: NotchGeometry
+
+    var body: some View {
+        HStack(spacing: 2) {
+            Text(model.isQuiet ? "Quiet" : summary)
+                .font(DSFont.sans(11.5, .semibold))
+                .foregroundStyle(model.board.needsYou.isEmpty ? DS.Palette.textTertiary : DS.Palette.gold)
+                .lineLimit(1)
+                .padding(.leading, 6)
+            Spacer(minLength: geometry.docked ? geometry.notchSize.width + 8 : 8)
+            RoundIconButton(symbol: model.isQuiet ? "bell.slash.fill" : "bell", help: model.isQuiet ? "Turn alerts back on" : "Quiet for 1 hour", size: 28) {
+                model.setQuiet(for: model.isQuiet ? nil : 3600)
+            }
+            RoundIconButton(symbol: "gearshape.fill", help: "Settings", size: 28) {
+                model.openPopup(.settings)
+            }
+        }
         .padding(.horizontal, 10)
+    }
+
+    private var summary: String {
+        let board = model.board
+        if !board.needsYou.isEmpty { return "\(board.needsYou.count) need\(board.needsYou.count == 1 ? "s" : "") you" }
+        if !board.cooking.isEmpty { return "\(board.cooking.count) cooking" }
+        return ""
+    }
+}
+
+/// One row of the hover list: the chat-style row with a hover wash and a hairline above.
+private struct IslandChatRow: View {
+    @EnvironmentObject private var model: AppModel
+    let session: AgentSession
+    let now: Date
+    let divider: Bool
+    @State private var hovering = false
+
+    var body: some View {
+        ChatRow(session: session, now: now)
+            .padding(.horizontal, 10)
+            .frame(maxHeight: .infinity)
+            .background(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(Color.white.opacity(hovering ? 0.07 : 0))
+            )
+            .overlay(alignment: .top) {
+                if divider && !hovering {
+                    Rectangle().fill(Color.white.opacity(0.09)).frame(height: 0.5).padding(.leading, 62).padding(.trailing, 10)
+                }
+            }
+            .contentShape(Rectangle())
+            .onHover { hovering = $0 }
+            .onTapGesture { model.open(session) }
+            .contextMenu {
+                if model.canOpen(session) { Button("Open") { model.open(session) } }
+                if model.pendingApproval(for: session) != nil {
+                    Button("Allow") { model.decide(session, allow: true) }
+                    Button("Deny") { model.decide(session, allow: false) }
+                }
+                if model.stopMethod(for: session) != nil { Button("Stop") { model.stop(session) } }
+                if !session.phase.isActive { Button("Dismiss") { model.dismiss(session) } }
+            }
+            .animation(DS.Motion.fast, value: hovering)
     }
 }
 
@@ -600,7 +667,7 @@ private struct SessionDetail: View {
         .task(id: session.lastActivityAt) {
             // For local Claude Code, read the agent's latest words straight from the transcript.
             guard let path = session.transcriptPath else { return }
-            let text = await Task.detached(priority: .utility) { ClaudeTranscript.lastAssistantText(atPath: path) }.value
+            let text = await Task.detached(priority: .utility) { ClaudeTranscript.lastAssistantText(atPath: path, currentTurnOnly: true) }.value
             // A newer activity restarted this task. Its read wins, not this older one.
             guard !Task.isCancelled else { return }
             latest = Format.snippet(text, limit: 200)

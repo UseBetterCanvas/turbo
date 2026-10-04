@@ -89,58 +89,12 @@ private struct PopupContent: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            header
-            if model.popupPage == .welcome {
-                WelcomeFlow()
-                    .transition(.opacity)
-            } else {
-                ScrollView {
-                    Group {
-                        if model.popupPage == .settings { SettingsPage() } else { SessionsPage() }
-                    }
-                    .frame(maxWidth: 640)
-                    .frame(maxWidth: .infinity)
-                    .padding(.horizontal, DS.Space.xl)
-                    .padding(.top, DS.Space.m)
-                    .padding(.bottom, DS.Space.xl)
-                    .id(model.popupPage)
-                    .transition(.opacity)
-                }
-                .background(DS.Palette.base)
+            // The strip beside the notch stays black, so the panel reads as part of it.
+            if geometry.docked {
+                Color.black.frame(height: geometry.notchSize.height)
             }
+            MainView(host: .popup)
         }
-        .animation(DS.Motion.base, value: model.popupPage)
-    }
-
-    /// Sits beside the notch: where you are on the left, actions on the right.
-    private var header: some View {
-        let height = max(geometry.docked ? geometry.notchSize.height : 0, 30) + 12
-        let inSettings = model.popupPage == .settings
-        return HStack(spacing: DS.Space.s) {
-            if inSettings {
-                HeaderButton(symbol: "chevron.left", help: "Back to sessions") { model.popupPage = .home }
-                Text("Settings")
-                    .font(DSFont.sans(14, .heavy))
-                    .foregroundStyle(DS.Palette.textPrimary)
-            } else {
-                AppIconView(size: 20)
-                Text("Turbo")
-                    .font(DSFont.sans(14, .heavy))
-                    .foregroundStyle(DS.Palette.textPrimary)
-            }
-            Spacer()
-            if model.popupPage != .welcome {
-                HeaderButton(symbol: "sparkles", help: "Visualizer") { model.openVisualizer() }
-                if !inSettings {
-                    HeaderButton(symbol: "gearshape", help: "Settings") { model.popupPage = .settings }
-                }
-            }
-            HeaderButton(symbol: "xmark", help: "Close (Esc)") { model.closePopup() }
-        }
-        .padding(.horizontal, DS.Space.l)
-        .padding(.top, geometry.docked ? 4 : 8)
-        .frame(height: height)
-        .background(geometry.docked ? Color.black : DS.Palette.rail)
     }
 }
 

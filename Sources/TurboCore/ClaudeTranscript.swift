@@ -3,20 +3,23 @@ import Foundation
 public enum ClaudeTranscript {
     /// The text of the last assistant message in a Claude Code transcript (JSONL), read from
     /// the tail of the file. Used as the "what did it cook" line when the Stop hook lacks one.
-    public static func lastAssistantText(atPath path: String, tailBytes: Int = 256 * 1024) -> String? {
+    /// `currentTurnOnly` stops at the last prompt you typed, so a new turn never shows the
+    /// previous turn's reply as its latest.
+    public static func lastAssistantText(atPath path: String, tailBytes: Int = 256 * 1024, currentTurnOnly: Bool = false) -> String? {
         guard let handle = FileHandle(forReadingAtPath: path) else { return nil }
         defer { try? handle.close() }
         let size = handle.seekToEndOfFile()
         let start = size > UInt64(tailBytes) ? size - UInt64(tailBytes) : 0
         handle.seek(toFileOffset: start)
-        return lastAssistantText(inJSONL: handle.readDataToEndOfFile())
+        return lastAssistantText(inJSONL: handle.readDataToEndOfFile(), currentTurnOnly: currentTurnOnly)
     }
 
-    public static func lastAssistantText(inJSONL data: Data) -> String? {
+    public static func lastAssistantText(inJSONL data: Data, currentTurnOnly: Bool = false) -> String? {
         let lines = data.split(separator: 0x0A)
         for line in lines.reversed() {
-            guard let obj = EventParser.jsonObject(Data(line)),
-                  obj["type"] as? String == "assistant",
+            guard let obj = EventParser.jsonObject(Data(line)) else { continue }
+            if currentTurnOnly, isTypedPrompt(obj) { return nil }
+            guard obj["type"] as? String == "assistant",
                   let message = obj["message"] as? [String: Any] else { continue }
             if let text = message["content"] as? String, !text.isEmpty { return text }
             let parts = (message["content"] as? [[String: Any]] ?? [])
@@ -26,6 +29,15 @@ public enum ClaudeTranscript {
             if !text.isEmpty { return text }
         }
         return nil
+    }
+
+    /// A user line that's something you typed, not a tool result Claude Code logs as "user".
+    static func isTypedPrompt(_ obj: [String: Any]) -> Bool {
+        guard obj["type"] as? String == "user", obj["isMeta"] as? Bool != true,
+              let message = obj["message"] as? [String: Any] else { return false }
+        if message["content"] is String { return true }
+        let blocks = message["content"] as? [[String: Any]] ?? []
+        return !blocks.isEmpty && !blocks.contains { $0["type"] as? String == "tool_result" }
     }
 }
 

@@ -146,6 +146,9 @@ final class AppModel: ObservableObject {
     private var lastPeek = (key: "", at: Date.distantPast)
     private var peekTask: Task<Void, Never>?
     @Published var popupOpen = false
+    /// The detached window is showing.
+    @Published var windowOpen = false
+    private(set) lazy var mainWindow = MainWindowController(model: self)
     @Published var popupPage: PopupPage = .home
 
     private let store = SessionStore()
@@ -663,6 +666,11 @@ final class AppModel: ObservableObject {
     }
 
     func dismiss(_ session: AgentSession) {
+        let wasSelected = selectedSessionID == session.id
+        defer {
+            // Showing it in full? Move on to the next one rather than an empty pane.
+            if wasSelected { selectedSessionID = board.all.first?.id }
+        }
         seen.remove(session.id)
         nudged.remove(session.id)
         store.remove(id: session.id)
@@ -806,12 +814,13 @@ final class AppModel: ObservableObject {
     /// ⌃⌥Space: open the board on whatever needs you, or close it.
     private func hotKeyPressed() {
         if popupOpen && popupPage == .home { closePopup(); return }
+        if windowOpen && mainWindow.isKey { mainWindow.close(); return }
         openPopup(preferences.hasOnboarded ? .home : .welcome)
     }
 
     /// Keyboard triage on the board. Returns false for keys it doesn't use.
     func handleBoardKey(_ characters: String, keyCode: UInt16) -> Bool {
-        guard popupOpen, popupPage == .home else { return false }
+        guard popupOpen || windowOpen, popupPage == .home else { return false }
         let list = board.all
         guard !list.isEmpty else { return false }
         let index = list.firstIndex { $0.id == selectedSessionID }
@@ -851,11 +860,32 @@ final class AppModel: ObservableObject {
 
     // MARK: Pop-up and windows
 
+    /// The pop-up becomes a regular window you can keep beside your work.
+    func detachToWindow() {
+        closePopup()
+        mainWindow.show()
+    }
+
+    /// Back from the window to the notch.
+    func attachToNotch() {
+        mainWindow.close()
+        openPopup(popupPage == .welcome ? .welcome : .home)
+    }
+
     func openPopup(_ page: PopupPage = .home) {
         popupPage = page
         if page == .home {
-            let all = board.all
-            if !all.contains(where: { $0.id == selectedSessionID }) { selectedSessionID = all.first?.id }
+            // Something waiting? Open on it. Otherwise keep the pick, or show the hello.
+            let current = board
+            if let waiting = current.needsYou.first {
+                selectedSessionID = waiting.id
+            } else if !current.all.contains(where: { $0.id == selectedSessionID }) {
+                selectedSessionID = nil
+            }
+        }
+        if windowOpen {
+            mainWindow.show()
+            return
         }
         popup?.open()
     }

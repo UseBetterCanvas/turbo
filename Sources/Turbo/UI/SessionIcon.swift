@@ -67,45 +67,43 @@ struct SessionIcon: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
+        // A round, soft avatar in the agent's color, like a contact photo.
         ZStack {
-            RoundedRectangle(cornerRadius: size * 0.3, style: .continuous)
-                .fill(DS.Palette.overlay)
-            AgentGlyph(agent: session.agent, size: size * 0.5)
+            Circle().fill(DS.Palette.overlay)
+            Circle().fill(session.agent.tint.opacity(0.26))
+            Circle().strokeBorder(session.agent.tint.opacity(0.55), lineWidth: max(1.5, size * 0.05))
+            AgentGlyph(agent: session.agent, size: size * 0.46)
         }
         .frame(width: size, height: size)
         .overlay { ring }
         .overlay(alignment: .topLeading) {
             if session.agent.isCloud {
                 badge(symbol: "cloud.fill", fill: DS.Palette.card, tint: DS.Palette.textSecondary)
-                    .offset(x: -size * 0.14, y: -size * 0.14)
+                    .offset(x: -size * 0.06, y: -size * 0.06)
                     .help("Runs in the cloud")
             }
         }
         .overlay(alignment: .bottomTrailing) {
-            status.offset(x: size * 0.14, y: size * 0.14)
+            status.offset(x: size * 0.06, y: size * 0.06)
         }
     }
 
-    /// A slow arc that circles the tile while the session cooks.
+    /// A slow arc that circles the avatar while the session cooks.
     @ViewBuilder private var ring: some View {
-        let shape = RoundedRectangle(cornerRadius: size * 0.3 + 2, style: .continuous)
         if model.stopping.contains(session.id) {
             // Stop pressed: a dashed red ring until it lands.
-            shape.strokeBorder(DS.Palette.bad, style: StrokeStyle(lineWidth: 1.5, dash: [3, 3])).padding(-2)
+            Circle().strokeBorder(DS.Palette.bad, style: StrokeStyle(lineWidth: 1.5, dash: [3, 3])).padding(-3)
         } else if session.phase == .cooking {
             if reduceMotion {
-                shape.strokeBorder(DS.Palette.textSecondary.opacity(0.6), lineWidth: 1.5).padding(-2)
+                Circle().strokeBorder(DS.Palette.textSecondary.opacity(0.6), lineWidth: 1.5).padding(-3)
             } else {
                 TimelineView(.animation) { context in
-                    let t = context.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 1.6) / 1.6
-                    shape
-                        .trim(from: t, to: t + 0.28)
-                        .stroke(DS.Palette.textPrimary.opacity(0.85), style: StrokeStyle(lineWidth: 1.5, lineCap: .round))
-                        .overlay(
-                            shape.trim(from: max(0, t - 0.72), to: max(0, t + 0.28 - 1))
-                                .stroke(DS.Palette.textPrimary.opacity(0.85), style: StrokeStyle(lineWidth: 1.5, lineCap: .round))
-                        )
-                        .padding(-2)
+                    let turn = context.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 1.4) / 1.4
+                    Circle()
+                        .trim(from: 0, to: 0.3)
+                        .stroke(DS.Palette.textPrimary.opacity(0.9), style: StrokeStyle(lineWidth: 1.5, lineCap: .round))
+                        .rotationEffect(.degrees(turn * 360))
+                        .padding(-3)
                 }
             }
         }
@@ -127,7 +125,7 @@ struct SessionIcon: View {
     }
 
     private func badge(symbol: String, fill: Color, tint: Color) -> some View {
-        let d = max(11, size * 0.42)
+        let d = max(12, size * 0.36)
         return Image(systemName: symbol)
             .font(.system(size: d * 0.52, weight: .heavy))
             .foregroundStyle(tint)
