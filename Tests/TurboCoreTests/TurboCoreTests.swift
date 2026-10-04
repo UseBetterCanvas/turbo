@@ -220,10 +220,11 @@ final class CodexCloudTests: XCTestCase {
 }
 
 final class UpdateInfoTests: XCTestCase {
-    let release = #"{"tag_name":"latest-build","published_at":"2026-10-04T06:25:49Z","body":"Built from main @ 4061f61.\n\n**Install**...","assets":[{"id":609300000,"name":"Turbo.zip","size":2240349}]}"#
+    // Not `release`: on macOS that name collides with NSObject's -release and crashes XCTest.
+    let releaseJSON = #"{"tag_name":"latest-build","published_at":"2026-10-04T06:25:49Z","body":"Built from main @ 4061f61.\n\n**Install**...","assets":[{"id":609300000,"name":"Turbo.zip","size":2240349}]}"#
 
     func testParseRelease() throws {
-        let info = try XCTUnwrap(UpdateInfo.parse(release: Data(release.utf8)))
+        let info = try XCTUnwrap(UpdateInfo.parse(release: Data(releaseJSON.utf8)))
         XCTAssertEqual(info.commit, "4061f61")
         XCTAssertEqual(info.assetID, 609300000)
         XCTAssertEqual(info.assetSize, 2240349)
@@ -231,7 +232,7 @@ final class UpdateInfoTests: XCTestCase {
     }
 
     func testNewerComparison() throws {
-        let info = try XCTUnwrap(UpdateInfo.parse(release: Data(release.utf8)))
+        let info = try XCTUnwrap(UpdateInfo.parse(release: Data(releaseJSON.utf8)))
         XCTAssertFalse(info.isNewer(thanInstalled: "4061f61fa4715b7270d71280f24ffcb7de759fe2"))
         XCTAssertTrue(info.isNewer(thanInstalled: "2cf2267d91d6f2fb6db717ec5a7785b396d1a0b0"))
         XCTAssertFalse(info.isNewer(thanInstalled: "dev"))
