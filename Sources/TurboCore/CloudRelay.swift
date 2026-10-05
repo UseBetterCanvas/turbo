@@ -77,55 +77,177 @@ public enum CloudRelay {
 
         """# : ""
         let stopURL = server.appendingPathComponent(stopChannel(channel)).appendingPathComponent("json").absoluteString + "?poll=1&since=10m"
-        return """
+        let publish = publishURL(channel: channel, server: server).absoluteString
+        let sourceLine = source.map { "out[\"source\"] = \"\($0)\"\n" } ?? ""
+        let sharePaths = shareTitles ? "            out[\"changes\"][\"paths\"] = paths[:8]\n" : ""
+        let note = shareTitles ? " Also your prompts and the final replies from Claude (you turned that on)." : ""
+        return #"""
         #!/bin/bash
-        # \(marker): tells the Turbo app on your Mac what this cloud session is doing.
-        # Sends the event name, repo folder name, session link and Claude's one-line description
-        # of the current step.\(shareTitles ? " Also your prompts and the final replies from Claude (you turned that on)." : "") Never code.
+        # \#(marker): tells the Turbo app on your Mac what this cloud session is doing.
+        # Sends the event name, repo folder name, session link, Claude's one-line description of
+        # the current step, test results and how many lines changed.\#(note) Never code.
+        # It also picks up replies and Stop requests you send from Turbo.
         input=$(cat)
         result=$(printf '%s' "$input" | python3 -c '
-        import json, os, sys, time
+        import json, os, sys, time, subprocess
         d = json.load(sys.stdin)
         out = {k: d[k] for k in ("hook_event_name", "session_id", "tool_name", "notification_type") if k in d}
-        if d.get("hook_event_name") == "Notification":
+        ev = d.get("hook_event_name")
+        sid = str(d.get("session_id", ""))
+        if ev == "Notification":
             out["message"] = str(d.get("message", ""))[:200]
         ti = d.get("tool_input") if isinstance(d.get("tool_input"), dict) else {}
         todo = next((t for t in ti.get("todos") or [] if isinstance(t, dict) and t.get("status") == "in_progress"), None)
         act = (todo or {}).get("activeForm") or ti.get("description")
         if act:
             out["activity"] = (str(act).splitlines() or [""])[0][:80]
-        \(titleLines)cwd = str(d.get("cwd") or "").rstrip("/")
+        \#(titleLines)cwd = str(d.get("cwd") or "").rstrip("/")
+        full = cwd
         out["cwd"] = os.path.basename(cwd) or cwd
-        out["remote_session_id"] = os.environ.get("CLAUDE_CODE_REMOTE_SESSION_ID", "")\(source.map { "\nout[\"source\"] = \"\($0)\"" } ?? "")
-        print(json.dumps(out))
-        stop = False
-        if d.get("hook_event_name") == "PreToolUse":
+        out["remote_session_id"] = os.environ.get("CLAUDE_CODE_REMOTE_SESSION_ID", "")
+        \#(sourceLine)tr = d.get("tool_response")
+        if ev == "PostToolUse" and isinstance(ti.get("command"), str):
+            cmd = ti["command"].lower()
+            runners = ("npm test", "npm run test", "pnpm test", "yarn test", "bun test", "jest", "vitest", "pytest", "go test", "cargo test", "swift test", "xcodebuild test", "rspec", "rails test", "mix test", "phpunit", "gradle test", "gradlew test", "mvn test", "dotnet test", "make test", "deno test", "playwright test")
+            if any(r in cmd for r in runners) and not (isinstance(tr, dict) and tr.get("interrupted")):
+                txt = ""
+                code = None
+                if isinstance(tr, dict):
+                    txt = chr(10).join(str(tr.get(k) or "") for k in ("stdout", "stderr", "output")).lower()
+                    code = tr.get("exit_code", tr.get("exitCode"))
+                elif isinstance(tr, str):
+                    txt = tr.lower()
+                ok = None
+                if isinstance(code, int):
+                    ok = code == 0
+                elif txt.strip():
+                    import re
+                    fails = [int(n) for n in re.findall(r"(\d+)\s+(?:failed|failing|failures?|errors?)\b", txt) + re.findall(r"(?:failed|failures|errors):\s*(\d+)", txt)]
+                    lines = [x.strip() for x in txt.splitlines()]
+                    if any(n > 0 for n in fails) or any(x.startswith(("fail ", "fail:", "--- fail")) or "test result: failed" in x or "tests failed" in x for x in lines):
+                        ok = False
+                    elif any(int(n) > 0 for n in re.findall(r"(\d+)\s+(?:passed|passing)\b", txt)) or "test result: ok" in txt or "all tests passed" in txt or 0 in fails:
+                        ok = True
+                if ok is not None:
+                    out["tests"] = "pass" if ok else "fail"
+        base_file = os.path.expanduser("~/.claude/turbo-base-" + "".join(ch for ch in sid if ch.isalnum() or ch == "-"))
+        def git(*args):
+            return subprocess.run(["git", "-C", full] + list(args), capture_output=True, text=True, timeout=5).stdout
+        def snapshot(base):
+            # Per-file line counts against the turn start, plus files git does not track yet.
+            files = {}
+            for row in git("diff", "--numstat", base).splitlines():
+                p = row.split(chr(9), 2)
+                if len(p) == 3:
+                    files[p[2]] = [int(p[0]) if p[0].isdigit() else 0, int(p[1]) if p[1].isdigit() else 0]
+            for path in git("ls-files", "--others", "--exclude-standard").splitlines()[:200]:
+                if path in files:
+                    continue
+                n = 0
+                try:
+                    fp = os.path.join(full, path)
+                    if os.path.getsize(fp) < 1000000:
+                        n = open(fp, "rb").read().count(b"\n")
+                except Exception:
+                    pass
+                files[path] = [n, 0]
+            return files
+        if ev == "UserPromptSubmit":
+            start = {"head": "", "files": {}}
+            try:
+                if full:
+                    start["head"] = git("rev-parse", "HEAD").strip()
+                    start["files"] = snapshot(start["head"] or "HEAD")
+            except Exception:
+                pass
+            try:
+                open(base_file, "w").write(json.dumps(start))
+            except Exception:
+                pass
+        if ev == "Stop" and full:
+            try:
+                start = json.load(open(base_file)) if os.path.exists(base_file) else {}
+                before = start.get("files") or {}
+                now = snapshot(start.get("head") or "HEAD")
+                add = dele = 0
+                paths = []
+                for path, cnt in sorted(now.items()):
+                    if before.get(path) != cnt:
+                        was = before.get(path) or [0, 0]
+                        add += max(0, cnt[0] - was[0])
+                        dele += max(0, cnt[1] - was[1])
+                        paths.append(path)
+                paths += [path for path in before if path not in now]
+                if paths:
+                    out["changes"] = {"files": len(paths), "add": add, "del": dele}
+        \#(sharePaths)    except Exception:
+                pass
+        ctl = ""
+        if ev in ("PreToolUse", "Stop"):
             try:
                 state = os.path.expanduser("~/.claude/turbo-stop-state")
                 seen = open(state).read().split() if os.path.exists(state) else []
                 last = float(seen[0]) if seen else 0.0
-                if time.time() - last >= 5:
+                if ev == "Stop" or time.time() - last >= 5:
                     import urllib.request
-                    body = urllib.request.urlopen("\(stopURL)", timeout=2).read().decode()
+                    body = urllib.request.urlopen("\#(stopURL)", timeout=2).read().decode()
                     ids = seen[1:]
+                    turn_start = os.path.getmtime(base_file) if os.path.exists(base_file) else 0
+                    msgs = []
                     for line in body.splitlines():
                         m = json.loads(line)
-                        if m.get("event") == "message" and m.get("message") == "stop " + str(d.get("session_id", "")) and m.get("id") not in ids:
-                            ids.append(m["id"])
-                            stop = True
+                        if m.get("event") == "message" and m.get("id") not in ids:
+                            msgs.append(m)
+                    def parsed(m):
+                        try:
+                            r = json.loads(str(m.get("message", "")))
+                            return r if isinstance(r, dict) else {}
+                        except Exception:
+                            return {}
+                    stop_now = any(str(m.get("message", "")) == "stop " + sid for m in msgs)
+                    if stop_now:
+                        # Stop always wins, even over a waiting reply.
+                        ids += [m["id"] for m in msgs if str(m.get("message", "")) == "stop " + sid]
+                        ctl = "STOP"
+                    elif ev == "Stop":
+                        cancelled = set(parsed(m).get("r") for m in msgs if parsed(m).get("t") == "cancel" and parsed(m).get("s") == sid)
+                        for m in msgs:
+                            r = parsed(m)
+                            # Only replies sent during this turn: an old one never surprises a later turn.
+                            if r.get("t") == "reply" and r.get("s") == sid and r.get("m") and r.get("r") not in cancelled and m.get("time", 0) >= turn_start - 2:
+                                ids.append(m["id"])
+                                ctl = "REPLY" + json.dumps({"decision": "block", "reason": str(r["m"])[:4000]})
+                                out["continued"] = str(r.get("r") or True)
+                                break
                     open(state, "w").write(" ".join([str(time.time())] + ids[-50:]))
             except Exception:
                 pass
-        if stop:
-            print("STOP")
+        print(json.dumps(out))
+        if ctl:
+            print(ctl)
         ' 2>/dev/null) || exit 0
         payload=$(printf '%s\n' "$result" | head -n 1)
-        nohup curl -s -m 5 -d "$payload" "\(publishURL(channel: channel, server: server).absoluteString)" >/dev/null 2>&1 &
-        if [ "$(printf '%s\n' "$result" | sed -n 2p)" = "STOP" ]; then
+        nohup curl -s -m 5 -d "$payload" "\#(publish)" >/dev/null 2>&1 &
+        ctl=$(printf '%s\n' "$result" | sed -n 2p)
+        if [ "$ctl" = "STOP" ]; then
           echo '{"continue":false,"stopReason":"Stopped from Turbo"}'
+        elif [ "${ctl#REPLY}" != "$ctl" ]; then
+          printf '%s\n' "${ctl#REPLY}"
         fi
         exit 0
-        """
+        """#
+    }
+
+    /// What Turbo posts to hand a cloud session your reply when its turn ends.
+    public static func replyMessage(sessionID: String, text: String, replyID: String = UUID().uuidString) -> String {
+        let data = (try? JSONSerialization.data(withJSONObject: ["t": "reply", "s": sessionID, "m": text, "r": replyID], options: [.sortedKeys])) ?? Data()
+        return String(decoding: data, as: UTF8.self)
+    }
+
+    /// Takes back a reply that hasn't been picked up yet.
+    public static func cancelMessage(sessionID: String, replyID: String) -> String {
+        let data = (try? JSONSerialization.data(withJSONObject: ["t": "cancel", "s": sessionID, "r": replyID], options: [.sortedKeys])) ?? Data()
+        return String(decoding: data, as: UTF8.self)
     }
 
     /// Paste into a cloud environment's Setup script. Installs the relay hook for every session

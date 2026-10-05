@@ -14,6 +14,10 @@ final class EventServer {
     var stops: StopRequests?
     /// A gate told a session to stop.
     var onStopped: (@MainActor (String) -> Void)?
+    /// Replies you've typed, handed to Claude when its turn ends.
+    var replies: ReplyQueue?
+    /// A Stop hook took one of your replies, so the session carries on with it.
+    var onReplied: (@MainActor (String, String) -> Void)?
 
     private var listener: NWListener?
     private let queue = DispatchQueue(label: "turbo.event-server")
@@ -72,11 +76,23 @@ final class EventServer {
                     return
                 }
                 if request.path == HookInstaller.gatePath {
-                    // Answer right away: "" carries on, a stop answer ends the turn.
-                    let id = EventParser.jsonObject(request.body)?["session_id"] as? String ?? ""
-                    let stop = self.stops?.consume(id) ?? false
-                    self.respond(on: connection, status: "200 OK", body: StopRequests.gateResponse(stop: stop), contentType: "application/json")
-                    if stop, let stopped = self.onStopped { Task { @MainActor in stopped(id) } }
+                    // Answer right away: "" carries on, a stop answer ends the turn, and at the
+                    // end of a turn a waiting reply keeps Claude going with it.
+                    let body = EventParser.jsonObject(request.body) ?? [:]
+                    let id = body["session_id"] as? String ?? ""
+                    // Stop always wins over a waiting reply.
+                    if self.stops?.consume(id) == true {
+                        self.respond(on: connection, status: "200 OK", body: StopRequests.gateResponse(stop: true), contentType: "application/json")
+                        if let stopped = self.onStopped { Task { @MainActor in stopped(id) } }
+                        return
+                    }
+                    if body["hook_event_name"] as? String == "Stop", let reply = self.replies?.take(id) {
+                        self.respond(on: connection, status: "200 OK", body: ReplyQueue.continueResponse(reply), contentType: "application/json")
+                        // Not the end of the turn after all: report the new instruction instead.
+                        if let replied = self.onReplied { Task { @MainActor in replied(id, reply) } }
+                        return
+                    }
+                    self.respond(on: connection, status: "200 OK", body: StopRequests.gateResponse(stop: false), contentType: "application/json")
                 } else {
                     self.respond(on: connection, status: "200 OK", body: "ok")
                 }

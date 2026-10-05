@@ -203,7 +203,11 @@ private struct UserRow: View {
                 .background(Circle().fill(DS.Palette.brand))
             VStack(alignment: .leading, spacing: 1) {
                 Text(Greeting.fullName).font(DSFont.sans(13, .bold)).foregroundStyle(DS.Palette.textPrimary).lineLimit(1)
-                Text(summary).font(DSFont.sans(11.5, .medium)).foregroundStyle(DS.Palette.textSecondary).lineLimit(1)
+                if let usage = model.usage {
+                    UsageMeter(usage: usage)
+                } else {
+                    Text(summary).font(DSFont.sans(11.5, .medium)).foregroundStyle(DS.Palette.textSecondary).lineLimit(1)
+                }
             }
             Spacer(minLength: 4)
             RoundIconButton(symbol: model.isQuiet ? "bell.slash.fill" : "bell", help: model.isQuiet ? "Quiet. Click to turn alerts back on" : "Quiet for 1 hour", size: 28) {
@@ -427,6 +431,20 @@ private struct SessionPane: View {
                             }
                             ThreadRow(item: item, session: session, lastInRun: isLastInRun(index))
                         }
+                        // Replies waiting for the turn to end, shown as sent-but-pending.
+                        ForEach(model.queuedReplies[session.id] ?? []) { reply in
+                            let text = reply.text
+                            VStack(alignment: .trailing, spacing: 3) {
+                                HStack {
+                                    Spacer(minLength: 80)
+                                    Bubble(text: text, fill: DS.Palette.brand.opacity(0.55), foreground: .white, mine: true, tail: true)
+                                }
+                                Button("Queued. Claude reads it when this step's done. Cancel") { model.cancelQueuedReplies(for: session) }
+                                    .buttonStyle(.plain)
+                                    .font(DSFont.sans(10.5, .medium))
+                                    .foregroundStyle(DS.Palette.textTertiary)
+                            }
+                        }
                         if session.phase == .cooking {
                             TypingBubble(caption: session.activityDetail ?? session.activity)
                         }
@@ -570,11 +588,15 @@ private struct ThreadRow: View {
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 4)
         case let .finished(failed):
-            Label(failed ? "Failed" : "Done", systemImage: failed ? "xmark.circle.fill" : "checkmark.circle.fill")
-                .font(DSFont.sans(11.5, .semibold))
-                .foregroundStyle(failed ? DS.Palette.bad : DS.Palette.ok)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 4)
+            VStack(spacing: 6) {
+                Label(failed ? "Failed" : "Done", systemImage: failed ? "xmark.circle.fill" : "checkmark.circle.fill")
+                    .font(DSFont.sans(11.5, .semibold))
+                    .foregroundStyle(failed ? DS.Palette.bad : DS.Palette.ok)
+                // What the turn left behind: lines changed and how the tests went.
+                if lastInRun { OutcomeBadges(session: session) }
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 4)
         }
     }
 
@@ -661,17 +683,23 @@ private struct TypingBubble: View {
     }
 }
 
-/// Where Messages has its reply box: Allow / Deny when it's waiting, otherwise Stop and a way
-/// to reply in the session itself.
+/// Where Messages has its reply box. Type and press Return:
+/// - waiting on a permission prompt: denies it, and Claude reads your note as what to do instead
+/// - working: queued, and Claude carries on with it the moment its turn ends
+/// - otherwise: copied, and the session opens so you can paste it
 private struct ComposerBar: View {
     @EnvironmentObject private var model: AppModel
     let session: AgentSession
+    @State private var draft = ""
+    @FocusState private var focused: Bool
 
     var body: some View {
+        let route = model.replyRoute(for: session)
         VStack(spacing: 0) {
             Rectangle().fill(Color.white.opacity(0.06)).frame(height: 1)
-            HStack(spacing: 8) {
-                if let pending = model.pendingApproval(for: session) {
+            if let pending = model.pendingApproval(for: session) {
+                HStack(spacing: 8) {
+                    Image(systemName: "hand.raised.fill").foregroundStyle(DS.Palette.gold)
                     Text(AppModel.approvalMessage(tool: pending.tool, detail: pending.detail))
                         .font(DSFont.sans(12.5, .semibold))
                         .foregroundStyle(DS.Palette.gold)
@@ -684,41 +712,73 @@ private struct ComposerBar: View {
                             .help("Allows \(rule) in this repo from now on")
                     }
                     Button("Allow") { model.decide(session, allow: true) }.buttonStyle(PrimaryButtonStyle())
-                } else {
-                    StopButton(session: session)
-                    Button {
-                        model.open(session)
-                    } label: {
-                        HStack {
-                            Text(model.canOpen(session) ? "Reply in \(session.link != nil ? "the session" : "the terminal")…" : "Replies happen in the session itself")
-                                .font(DSFont.sans(13, .medium))
-                                .foregroundStyle(DS.Palette.textTertiary)
-                            Spacer()
-                            if model.canOpen(session) {
-                                Image(systemName: "arrow.up.circle.fill")
-                                    .font(.system(size: 20))
-                                    .foregroundStyle(DS.Palette.brand)
-                            }
-                        }
-                        .padding(.leading, 14)
-                        .padding(.trailing, 5)
-                        .frame(height: 34)
-                        .background(Capsule().strokeBorder(Color.white.opacity(0.14), lineWidth: 1))
-                        .contentShape(Capsule())
+                }
+                .padding(.horizontal, DS.Space.xl)
+                .padding(.top, 10)
+            }
+            if let note = model.composerNotes[session.id] {
+                Text(note)
+                    .font(DSFont.sans(11.5, .medium))
+                    .foregroundStyle(DS.Palette.textSecondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, DS.Space.xl)
+                    .padding(.top, 8)
+            }
+            HStack(spacing: 8) {
+                StopButton(session: session)
+                HStack(spacing: 6) {
+                    TextField(placeholder(route), text: $draft, axis: .vertical)
+                        .textFieldStyle(.plain)
+                        .font(DSFont.sans(13.5, .medium))
+                        .foregroundStyle(DS.Palette.textPrimary)
+                        .lineLimit(1...5)
+                        .focused($focused)
+                        .onSubmit(send)
+                    Button(action: send) {
+                        Image(systemName: "arrow.up.circle.fill")
+                            .font(.system(size: 22))
+                            .foregroundStyle(draft.trimmingCharacters(in: .whitespaces).isEmpty ? DS.Palette.textTertiary : DS.Palette.brand)
                     }
                     .buttonStyle(.plain)
-                    .disabled(!model.canOpen(session))
-                    .help("Opens the session so you can reply")
-                    if !session.phase.isActive {
-                        Button("Dismiss") { withAnimation(DS.Motion.base) { model.dismiss(session) } }
-                            .buttonStyle(GhostButtonStyle())
-                    }
+                    .disabled(draft.trimmingCharacters(in: .whitespaces).isEmpty)
+                    .keyboardShortcut(.return, modifiers: [.command])
+                    .help(help(route))
+                }
+                .padding(.leading, 14)
+                .padding(.trailing, 5)
+                .padding(.vertical, 5)
+                .background(RoundedRectangle(cornerRadius: 18, style: .continuous).strokeBorder(Color.white.opacity(focused ? 0.28 : 0.14), lineWidth: 1))
+                if !session.phase.isActive {
+                    Button("Dismiss") { withAnimation(DS.Motion.base) { model.dismiss(session) } }
+                        .buttonStyle(GhostButtonStyle())
                 }
             }
             .padding(.horizontal, DS.Space.xl)
             .padding(.vertical, 12)
         }
         .padding(.bottom, 6)
+    }
+
+    private func send() {
+        let text = draft
+        draft = ""
+        model.send(text, to: session)
+    }
+
+    private func placeholder(_ route: AppModel.ReplyRoute) -> String {
+        switch route {
+        case .denyWithNote: return "Tell Claude what to do instead…"
+        case .queueLocal, .queueCloud: return "Reply. Claude picks it up when this step's done…"
+        case .copyAndOpen: return session.phase.isActive ? "Reply (copies it and opens the session)…" : "Continue… (copies it and opens the session)"
+        }
+    }
+
+    private func help(_ route: AppModel.ReplyRoute) -> String {
+        switch route {
+        case .denyWithNote: return "Denies the request and tells Claude what to do instead"
+        case .queueLocal, .queueCloud: return "Queued: Claude continues with it the moment its turn ends"
+        case .copyAndOpen: return "Copies your message and opens the session to paste it"
+        }
     }
 }
 
@@ -792,5 +852,81 @@ struct BubbleShape: Shape {
         p.addArc(center: CGPoint(x: rect.minX + r, y: rect.minY + r), radius: r, startAngle: .degrees(180), endAngle: .degrees(270), clockwise: false)
         p.closeSubpath()
         return p
+    }
+}
+
+/// "4 files · +120 −35" and "Tests passing", for a finished turn.
+struct OutcomeBadges: View {
+    let session: AgentSession
+
+    var body: some View {
+        if session.changes != nil || session.testsPassed != nil {
+            HStack(spacing: 6) {
+                if let changes = session.changes {
+                    HStack(spacing: 5) {
+                        Image(systemName: "doc.on.doc").font(.system(size: 10, weight: .semibold))
+                        Text("\(changes.files) file\(changes.files == 1 ? "" : "s")")
+                        Text("+\(changes.additions)").foregroundStyle(DS.Palette.ok)
+                        Text("−\(changes.deletions)").foregroundStyle(DS.Palette.bad)
+                    }
+                    .help(changes.paths.prefix(12).joined(separator: "\n"))
+                    .badgeChip()
+                }
+                if let passed = session.testsPassed {
+                    Label(passed ? "Tests passing" : "Tests failing", systemImage: passed ? "checkmark.seal.fill" : "exclamationmark.triangle.fill")
+                        .foregroundStyle(passed ? DS.Palette.ok : DS.Palette.bad)
+                        .badgeChip()
+                }
+            }
+            .font(DSFont.sans(11.5, .semibold).monospacedDigit())
+            .foregroundStyle(DS.Palette.textSecondary)
+        }
+    }
+}
+
+private extension View {
+    func badgeChip() -> some View {
+        padding(.horizontal, 9).frame(height: 24).background(Capsule().fill(Color.white.opacity(0.07)))
+    }
+}
+
+/// The 5-hour session limit first, then the week, from the Claude app's own numbers.
+struct UsageMeter: View {
+    let usage: PlanUsage
+    var compact = false
+
+    var body: some View {
+        HStack(spacing: 6) {
+            ring(usage.fiveHour)
+            Text(compact ? "\(usage.fiveHour)%" : "Session \(usage.fiveHour)%")
+                .foregroundStyle(color(usage.fiveHour))
+            if let week = usage.week, !compact {
+                Text("· Week \(week)%").foregroundStyle(week >= 80 ? color(week) : DS.Palette.textTertiary)
+            }
+        }
+        .font(DSFont.sans(11.5, .semibold).monospacedDigit())
+        .help(tooltip)
+    }
+
+    private var tooltip: String {
+        var text = "Claude plan usage: \(usage.fiveHour)% of the 5-hour session limit"
+        if let week = usage.week { text += ", \(week)% of the weekly limit" }
+        let time = usage.recordedAt.formatted(date: .omitted, time: .shortened)
+        return text + ". As of \(time)."
+    }
+
+    private func ring(_ percent: Int) -> some View {
+        ZStack {
+            Circle().stroke(Color.white.opacity(0.14), lineWidth: 2.5)
+            Circle()
+                .trim(from: 0, to: CGFloat(min(max(percent, 0), 100)) / 100)
+                .stroke(color(percent), style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
+                .rotationEffect(.degrees(-90))
+        }
+        .frame(width: 13, height: 13)
+    }
+
+    private func color(_ percent: Int) -> Color {
+        percent >= 95 ? DS.Palette.bad : percent >= 80 ? DS.Palette.gold : DS.Palette.textSecondary
     }
 }

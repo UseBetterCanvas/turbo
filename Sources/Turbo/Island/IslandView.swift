@@ -58,8 +58,21 @@ struct IslandView: View {
         case .hidden:
             Color.clear
         case .idle:
-            IdleIsland(geometry: geometry)
-                .transition(.blurFade)
+            VStack(spacing: 0) {
+                IdleIsland(geometry: geometry)
+                // Heads-ups (like a usage limit) show here even when nothing's cooking.
+                if let peek = model.peekText {
+                    Text(peek)
+                        .font(DSFont.sans(11.5, .semibold))
+                        .foregroundStyle(DS.Palette.textPrimary)
+                        .lineLimit(1)
+                        .padding(.horizontal, 14)
+                        .frame(height: IslandLayout.peekHeight)
+                        .frame(maxWidth: .infinity)
+                        .transition(.blurFade)
+                }
+            }
+            .transition(.blurFade)
         case .compact:
             CompactIsland(sessions: model.active, geometry: geometry)
                 .transition(.blurFade)
@@ -521,11 +534,17 @@ private struct ListTopBar: View {
 
     var body: some View {
         HStack(spacing: 2) {
-            Text(model.isQuiet ? "Quiet" : summary)
-                .font(DSFont.sans(11.5, .semibold))
-                .foregroundStyle(model.board.needsYou.isEmpty ? DS.Palette.textTertiary : DS.Palette.gold)
-                .lineLimit(1)
-                .padding(.leading, 6)
+            // Your session limit, always in view; what needs you otherwise.
+            if let usage = model.usage {
+                UsageMeter(usage: usage, compact: geometry.docked)
+                    .padding(.leading, 6)
+            } else {
+                Text(model.isQuiet ? "Quiet" : summary)
+                    .font(DSFont.sans(11.5, .semibold))
+                    .foregroundStyle(model.board.needsYou.isEmpty ? DS.Palette.textTertiary : DS.Palette.gold)
+                    .lineLimit(1)
+                    .padding(.leading, 6)
+            }
             Spacer(minLength: geometry.docked ? geometry.notchSize.width + 8 : 8)
             RoundIconButton(symbol: model.isQuiet ? "bell.slash.fill" : "bell", help: model.isQuiet ? "Turn alerts back on" : "Quiet for 1 hour", size: 28) {
                 model.setQuiet(for: model.isQuiet ? nil : 3600)

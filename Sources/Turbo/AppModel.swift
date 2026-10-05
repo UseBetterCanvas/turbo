@@ -138,7 +138,33 @@ final class AppModel: ObservableObject {
     func refreshIntegrations() {
         let ready = Integrations.isClaudeStopInstalled
         if ready != claudeStopReady { claudeStopReady = ready }
+        let replies = Integrations.isClaudeReplyInstalled
+        if replies != claudeReplyReady { claudeReplyReady = replies }
     }
+
+    /// Claude Code's Stop hook asks Turbo for your queued replies.
+    @Published private(set) var claudeReplyReady = false
+    private let replyQueue = ReplyQueue()
+    /// A reply you've typed that's waiting for the session to finish its turn.
+    struct QueuedReply: Equatable, Identifiable {
+        let id: String
+        let text: String
+        let cloud: Bool
+    }
+    /// Replies waiting for their session to finish its turn, by session.
+    @Published private(set) var queuedReplies: [String: [QueuedReply]] = [:]
+    /// A one-line note for the composer ("Copied. Paste it in the terminal.").
+    @Published private(set) var composerNotes: [String: String] = [:]
+    /// Your Claude plan usage, as the Claude app last recorded it.
+    @Published private(set) var usage: PlanUsage?
+    private var usageAlertLevel = 0
+    /// Where each session's repo stood when its turn started, to diff against when it ends.
+    private struct Baseline {
+        let turnStartedAt: Date?
+        let head: String
+        let snapshot: WorktreeSnapshot
+    }
+    private var turnBaselines: [String: Baseline] = [:]
     /// False when another app already owns ⌃⌥Space.
     @Published private(set) var hotKeyAvailable = false
     /// A step the lead session just moved on to, shown briefly under the tiny island.
@@ -214,6 +240,8 @@ final class AppModel: ObservableObject {
         server.onFailure = { [weak self] message in self?.serverError = message }
         server.stops = stops
         server.onStopped = { [weak self] id in self?.finishStopped(agent: .claude, sessionID: id) }
+        server.replies = replyQueue
+        server.onReplied = { [weak self] id, text in self?.replyDelivered(agent: .claude, sessionID: id, text: text) }
         server.onPermission = { [weak self] request, respond in
             guard let self else { respond(""); return }
             self.lastHeard[.claude] = Date()
@@ -231,10 +259,12 @@ final class AppModel: ObservableObject {
         pollLogs()
         loops.append(every(seconds: 1) { [weak self] in self?.pollLogs() })
         // Already connected? Bring Turbo's own hooks up to date (adds Stop and approvals).
-        if Integrations.isClaudeInstalled && !(Integrations.isClaudeStopInstalled && Integrations.isClaudeApprovalInstalled) {
+        if Integrations.isClaudeInstalled && !(Integrations.isClaudeStopInstalled && Integrations.isClaudeApprovalInstalled && Integrations.isClaudeReplyInstalled) {
             try? Integrations.installClaude()
         }
         refreshIntegrations()
+        refreshUsage()
+        loops.append(every(seconds: 60) { [weak self] in self?.refreshUsage() })
         loops.append(every(seconds: 15) { [weak self] in
             self?.nudgeLongWaits()
             self?.refreshIntegrations()
@@ -250,6 +280,16 @@ final class AppModel: ObservableObject {
             // Cowork switched off: ignore what the Cowork plugin reports too.
             if event.agent == .cowork && !self.preferences.watchCoworkSessions { return }
             var event = event
+            // A reply you sent kept the cloud session going: show it as the new prompt.
+            if event.continuedByReply {
+                let key = "\(event.agent.rawValue):\(event.sessionID ?? "")"
+                let list = self.queuedReplies[key] ?? []
+                // Match the exact reply the script picked up; fall back to the oldest.
+                if let reply = list.first(where: { $0.id == event.continuedReplyID }) ?? list.first {
+                    self.replyDelivered(agent: event.agent, sessionID: event.sessionID ?? "", replyID: reply.id, text: reply.text)
+                    return
+                }
+            }
             // Sharing turned off: show nothing a not-yet-updated script or plugin still sends.
             if !self.preferences.cloudShareTitles {
                 event.prompt = nil
@@ -345,6 +385,7 @@ final class AppModel: ObservableObject {
         switch change {
         case let .started(session):
             pulses.send(Pulse(agent: session.agent, kind: .start))
+            recordBaseline(for: session)
             dropSpotlights(for: session.id)
             if preferences.visualizerAutoOpen {
                 visualizer.show()
@@ -379,6 +420,8 @@ final class AppModel: ObservableObject {
             seen.remove(session.id)
             nudged.remove(session.id)
             stopping.remove(session.id)
+            computeChanges(for: session)
+            returnUndeliveredReplies(for: session)
             stops.cancel(session.sessionID)
             let worthCelebrating = (session.cookDuration ?? .infinity) >= preferences.minimumCookSeconds && !isQuiet
             if worthCelebrating {
@@ -725,6 +768,8 @@ final class AppModel: ObservableObject {
     func stop(_ session: AgentSession) {
         guard let method = stopMethod(for: session) else { open(session); return }
         markSeen(session)
+        // Stopping means no more instructions: queued replies come back to you.
+        returnUndeliveredReplies(for: session, stopped: true)
         stopping.insert(session.id)
         // Waiting on a permission prompt? Answer it with "stop" right away.
         if session.agent == .claude, var queue = approvals[session.id], !queue.isEmpty {
@@ -784,10 +829,213 @@ final class AppModel: ObservableObject {
         return !pids.isEmpty
     }
 
+    // MARK: Replies
+
+    enum ReplyRoute: Equatable {
+        /// Denies the waiting permission prompt with your message, which Claude reads as what to do instead.
+        case denyWithNote
+        /// Handed to Claude when its current turn ends; it carries on with it.
+        case queueLocal
+        case queueCloud
+        /// Can't be delivered from here: copied, and the session opens so you can paste it.
+        case copyAndOpen
+    }
+
+    func replyRoute(for session: AgentSession) -> ReplyRoute {
+        if pendingApproval(for: session) != nil { return .denyWithNote }
+        // Waiting on a question: there's no end of turn coming for a queued reply to ride.
+        guard session.phase == .cooking else { return .copyAndOpen }
+        switch session.agent {
+        case .claude: return claudeReplyReady ? .queueLocal : .copyAndOpen
+        case .cloud: return preferences.cloudEnabled ? .queueCloud : .copyAndOpen
+        case .cowork: return session.logPath == nil && preferences.cloudEnabled ? .queueCloud : .copyAndOpen
+        case .codex, .codexCloud: return .copyAndOpen
+        }
+    }
+
+    func send(_ raw: String, to session: AgentSession) {
+        let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return }
+        composerNotes[session.id] = nil
+        markSeen(session)
+        switch replyRoute(for: session) {
+        case .denyWithNote:
+            guard var queue = approvals[session.id], !queue.isEmpty else { return }
+            let pending = queue.removeFirst()
+            approvals[session.id] = queue.isEmpty ? nil : queue
+            pending.respond(EventParser.permissionDeny(message: text))
+            handle(AgentEvent(agent: session.agent, sessionID: session.sessionID, kind: .activity(tool: nil)))
+            store.appendThread(.prompt, text, to: session.id)
+            sessions = store.sorted
+        case .queueLocal:
+            let reply = QueuedReply(id: UUID().uuidString, text: text, cloud: false)
+            replyQueue.enqueue(text, for: session.sessionID)
+            queuedReplies[session.id, default: []].append(reply)
+        case .queueCloud:
+            let reply = QueuedReply(id: UUID().uuidString, text: text, cloud: true)
+            queuedReplies[session.id, default: []].append(reply)
+            postControl(CloudRelay.replyMessage(sessionID: session.sessionID, text: text, replyID: reply.id)) { [weak self] ok in
+                guard let self, !ok else { return }
+                // It never left this Mac: take it back and say so.
+                self.queuedReplies[session.id]?.removeAll { $0.id == reply.id }
+                if self.queuedReplies[session.id]?.isEmpty == true { self.queuedReplies[session.id] = nil }
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(text, forType: .string)
+                self.composerNotes[session.id] = "Couldn't reach the cloud session. Your reply is copied: paste it in the session, or try again."
+            }
+        case .copyAndOpen:
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(text, forType: .string)
+            composerNotes[session.id] = "Copied. Paste it in the session (⌘V)."
+            if canOpen(session) { open(session) }
+        }
+    }
+
+    /// Posts to the private control channel; reports whether it got through.
+    private func postControl(_ message: String, done: (@MainActor (Bool) -> Void)? = nil) {
+        var request = URLRequest(url: CloudRelay.publishURL(channel: CloudRelay.stopChannel(preferences.cloudChannel)))
+        request.httpMethod = "POST"
+        request.httpBody = Data(message.utf8)
+        URLSession.shared.dataTask(with: request) { _, response, error in
+            let ok = error == nil && ((response as? HTTPURLResponse)?.statusCode ?? 0) / 100 == 2
+            Task { @MainActor in done?(ok) }
+        }.resume()
+    }
+
+    /// Takes back replies that haven't been picked up yet: local ones simply leave the queue,
+    /// cloud ones are cancelled on the channel so the script skips them.
+    func cancelQueuedReplies(for session: AgentSession) {
+        replyQueue.clear(session.sessionID)
+        for reply in queuedReplies[session.id] ?? [] where reply.cloud {
+            postControl(CloudRelay.cancelMessage(sessionID: session.sessionID, replyID: reply.id))
+        }
+        queuedReplies[session.id] = nil
+    }
+
+    private func replyDelivered(agent: Agent, sessionID: String, replyID: String? = nil, text: String) {
+        let key = "\(agent.rawValue):\(sessionID)"
+        if var list = queuedReplies[key], let index = list.firstIndex(where: { $0.id == replyID }) ?? list.firstIndex(where: { $0.text == text }) {
+            list.remove(at: index)
+            queuedReplies[key] = list.isEmpty ? nil : list
+        }
+        handle(AgentEvent(agent: agent, sessionID: sessionID, kind: .promptSubmitted, prompt: text))
+    }
+
+    /// The turn ended (or was stopped) before your reply could ride along: hand it back on the clipboard.
+    private func returnUndeliveredReplies(for session: AgentSession, stopped: Bool = false) {
+        guard let list = queuedReplies[session.id], !list.isEmpty else { return }
+        cancelQueuedReplies(for: session)
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(list.map(\.text).joined(separator: "\n\n"), forType: .string)
+        composerNotes[session.id] = stopped
+            ? "Stopped. Your queued reply wasn't sent; it's copied if you want it."
+            : "It finished before your reply went out. It's copied: paste it in the session."
+    }
+
+    // MARK: Changes
+
+    /// Records where the repo stands as a turn starts: its commit and any edits already there.
+    private func recordBaseline(for session: AgentSession) {
+        guard let cwd = session.cwd, !session.agent.isCloud, session.logPath == nil || session.agent == .codex else { return }
+        let id = session.id, turn = session.turnStartedAt
+        Task.detached(priority: .utility) {
+            guard let head = Self.git(["rev-parse", "HEAD"], in: cwd)?.trimmingCharacters(in: .whitespacesAndNewlines), !head.isEmpty else { return }
+            let snapshot = Self.worktree(in: cwd, against: head)
+            await MainActor.run {
+                let model = AppModel.shared
+                // Only if that same turn is still the current one.
+                guard model.store.sessions[id]?.turnStartedAt == turn else { return }
+                model.turnBaselines[id] = Baseline(turnStartedAt: turn, head: head, snapshot: snapshot)
+            }
+        }
+    }
+
+    /// Local sessions: what this turn itself changed, from git.
+    private func computeChanges(for session: AgentSession) {
+        guard session.changes == nil, let cwd = session.cwd, !session.agent.isCloud,
+              FileManager.default.fileExists(atPath: cwd) else { return }
+        let id = session.id, turn = session.turnStartedAt
+        let baseline = turnBaselines.removeValue(forKey: id).flatMap { $0.turnStartedAt == turn ? $0 : nil }
+        Task.detached(priority: .utility) {
+            let head = baseline?.head ?? "HEAD"
+            let now = Self.worktree(in: cwd, against: head)
+            let changes = now.since(baseline?.snapshot ?? WorktreeSnapshot())
+            guard changes.files > 0 else { return }
+            await MainActor.run {
+                let model = AppModel.shared
+                // A newer turn has started since: this result belongs to the old one.
+                guard model.store.sessions[id]?.turnStartedAt == turn else { return }
+                model.store.setChanges(changes, for: id)
+                model.sessions = model.store.sorted
+            }
+        }
+    }
+
+    nonisolated static func worktree(in cwd: String, against base: String) -> WorktreeSnapshot {
+        let numstat = git(["diff", "--numstat", base], in: cwd) ?? ""
+        var untracked: [String: Int] = [:]
+        for path in (git(["ls-files", "--others", "--exclude-standard"], in: cwd) ?? "").split(whereSeparator: \.isNewline).prefix(200) {
+            let url = URL(fileURLWithPath: cwd).appendingPathComponent(String(path))
+            var lines = 0
+            let attributes = try? FileManager.default.attributesOfItem(atPath: url.path)
+            let size = (attributes?[.size] as? NSNumber)?.intValue ?? 0
+            if size < 1_000_000, let data = try? Data(contentsOf: url) {
+                lines = data.reduce(0) { $1 == 0x0A ? $0 + 1 : $0 }
+            }
+            untracked[String(path)] = lines
+        }
+        return WorktreeSnapshot(numstat: numstat, untracked: untracked)
+    }
+
+    nonisolated static func git(_ args: [String], in directory: String) -> String? {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
+        process.arguments = ["-C", directory] + args
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = FileHandle.nullDevice
+        guard (try? process.run()) != nil else { return nil }
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        return process.terminationStatus == 0 ? String(decoding: data, as: UTF8.self) : nil
+    }
+
+    // MARK: Usage
+
+    /// Reads the Claude app's latest plan-usage sample, and gives one heads-up as the 5-hour
+    /// session limit passes 80% and again at 95%.
+    private func refreshUsage() {
+        Task.detached(priority: .utility) {
+            let latest = PlanUsage.load()
+            await MainActor.run {
+                let model = AppModel.shared
+                if latest != model.usage { model.usage = latest }
+                guard let latest else { return }
+                let level = latest.fiveHour >= 95 ? 2 : latest.fiveHour >= 80 ? 1 : 0
+                if level > model.usageAlertLevel {
+                    model.playSound(named: "Funk")
+                    model.announce("\(latest.fiveHour)% of your 5-hour session limit used")
+                }
+                model.usageAlertLevel = level
+            }
+        }
+    }
+
     // MARK: Peek
 
     /// The tiny island grows for a moment to show the step the session it tracks moved on to.
     /// At most every 6 seconds, so a busy session doesn't make it flicker.
+    /// Shows a short line under the tiny island for a few seconds.
+    func announce(_ text: String) {
+        peekText = text
+        peekTask?.cancel()
+        peekTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 5_000_000_000)
+            guard !Task.isCancelled else { return }
+            self?.peekText = nil
+        }
+    }
+
     private func peekIfNewStep(_ session: AgentSession) {
         guard preferences.showStepPeeks, presentation == .compact, session.id == lead?.id,
               let detail = session.activityDetail else { return }
@@ -866,7 +1114,7 @@ final class AppModel: ObservableObject {
         sessions = store.sorted
     }
 
-    private func playSound(named name: String) {
+    func playSound(named name: String) {
         guard preferences.playSound, !isQuiet else { return }
         NSSound(named: NSSound.Name(name))?.play()
     }

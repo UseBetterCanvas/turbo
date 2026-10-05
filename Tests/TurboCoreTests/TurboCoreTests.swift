@@ -564,7 +564,7 @@ final class ActivityDetailTests: XCTestCase {
     }
 
     func testSetupScriptTitlesAreOptIn() {
-        XCTAssertFalse(CloudRelay.setupScript(channel: "turbo-x").contains("UserPromptSubmit\":"))
+        XCTAssertFalse(CloudRelay.setupScript(channel: "turbo-x").contains("out[\"prompt\"]"))
         XCTAssertFalse(CloudRelay.relayScript(channel: "turbo-x").contains("out[\"prompt\"]"))
         XCTAssertTrue(CloudRelay.relayScript(channel: "turbo-x", shareTitles: true).contains("out[\"prompt\"]"))
         XCTAssertTrue(CloudRelay.relayScript(channel: "turbo-x", shareTitles: true).contains("out[\"reply\"]"))
@@ -941,5 +941,133 @@ final class CoworkPluginTests: XCTestCase {
         XCTAssertEqual(event.agent, .cowork)
         XCTAssertEqual(event.sessionID, "cw1")
         XCTAssertEqual(event.hostAppBundleID, "com.anthropic.claudefordesktop")
+    }
+}
+
+final class ReplyAndChangesTests: XCTestCase {
+    func testReplyQueueAndResponse() throws {
+        let q = ReplyQueue()
+        q.enqueue("add tests", for: "s")
+        q.enqueue("then docs", for: "s")
+        XCTAssertEqual(q.take("s"), "add tests")
+        XCTAssertEqual(q.pending("s"), ["then docs"])
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(ReplyQueue.continueResponse("say \"hi\"").utf8)) as? [String: String])
+        XCTAssertEqual(json, ["decision": "block", "reason": "say \"hi\""])
+    }
+
+    func testStopUsesTheGate() throws {
+        let data = try HookInstaller.installClaude(into: nil)
+        XCTAssertTrue(HookInstaller.isClaudeReplyInstalled(data))
+        XCTAssertTrue(HookInstaller.isClaudeStopInstalled(data))
+    }
+
+    func testTestSignalAndChanges() {
+        XCTAssertEqual(TestSignal.passed(command: "npm test", output: "Tests: 3 failed, 10 passed"), false)
+        XCTAssertNil(TestSignal.passed(command: "npm test", output: ""))
+        XCTAssertNil(TestSignal.passed(command: "npm test", output: "compiling..."))
+        XCTAssertEqual(TestSignal.passed(command: "npm test", output: "suite a: 0 failed\nsuite b: 2 failed"), false)
+        XCTAssertEqual(TestSignal.passed(command: "cargo test", output: "test result: ok. 5 passed; 0 failed"), true)
+        XCTAssertEqual(TestSignal.passed(command: "pytest -q", output: "12 passed in 0.4s"), true)
+        XCTAssertEqual(TestSignal.passed(command: "swift test", output: "", exitCode: 1), false)
+        XCTAssertNil(TestSignal.passed(command: "ls -la", output: "failed"))
+        let hook = #"{"hook_event_name":"PostToolUse","session_id":"s","tool_name":"Bash","tool_input":{"command":"npm test"},"tool_response":{"stdout":"2 failing","stderr":""}}"#
+        XCTAssertEqual(EventParser.parseClaudeHook(Data(hook.utf8))?.testsPassed, false)
+        let c = ChangeSummary.parse(numstat: "10\t2\tSources/A.swift\n-\t-\tlogo.png\n3\t0\tREADME.md\n")
+        XCTAssertEqual(c, ChangeSummary(files: 3, additions: 13, deletions: 2, paths: ["Sources/A.swift", "logo.png", "README.md"]))
+    }
+
+    func testContinuedStopStartsANewTurn() throws {
+        let json = #"{"hook_event_name":"Stop","session_id":"s","continued":true}"#
+        XCTAssertEqual(EventParser.parseClaudeHook(Data(json.utf8))?.kind, .promptSubmitted)
+    }
+
+    /// The cloud script, end to end: replies are picked up on Stop, test runs and git changes reported.
+    func testRelayDeliversReplyAndReportsChanges() throws {
+        guard FileManager.default.isExecutableFile(atPath: "/usr/bin/python3"),
+              FileManager.default.isExecutableFile(atPath: "/usr/bin/git") else { throw XCTSkip("needs python3 and git") }
+        let fm = FileManager.default
+        let dir = fm.temporaryDirectory.appendingPathComponent("turbo-e2e-\(UUID().uuidString)")
+        let home = dir.appendingPathComponent("home"), repo = dir.appendingPathComponent("repo"), www = dir.appendingPathComponent("www/turbo-x-stop")
+        for d in [home.appendingPathComponent(".claude"), repo, www] { try fm.createDirectory(at: d, withIntermediateDirectories: true) }
+        defer { try? fm.removeItem(at: dir) }
+        func sh(_ args: [String], cwd: URL) throws {
+            let p = Process(); p.executableURL = URL(fileURLWithPath: "/usr/bin/env"); p.arguments = args; p.currentDirectoryURL = cwd
+            p.environment = ["HOME": home.path, "PATH": "/usr/bin:/bin", "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"]
+            p.standardOutput = FileHandle.nullDevice; p.standardError = FileHandle.nullDevice
+            try p.run(); p.waitUntilExit()
+        }
+        try sh(["git", "init", "-q"], cwd: repo)
+        try "one\n".write(to: repo.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+        try sh(["git", "add", "."], cwd: repo)
+        try sh(["git", "commit", "-qm", "init"], cwd: repo)
+        try (#"{"id":"r1","event":"message","time":"# + "\(Int(Date().timeIntervalSince1970) + 30)" + #","message":"# + "\"" + CloudRelay.replyMessage(sessionID: "s1", text: "now add tests").replacingOccurrences(of: "\"", with: "\\\"") + "\"" + "}\n")
+            .write(to: www.appendingPathComponent("json"), atomically: true, encoding: .utf8)
+        let port = Int.random(in: 41000...49000)
+        let server = Process()
+        server.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
+        server.arguments = ["-m", "http.server", "\(port)", "--bind", "127.0.0.1", "--directory", dir.appendingPathComponent("www").path]
+        server.standardOutput = FileHandle.nullDevice; server.standardError = FileHandle.nullDevice
+        try server.run()
+        defer { server.terminate() }
+        Thread.sleep(forTimeInterval: 0.8)
+        let fakeCurl = dir.appendingPathComponent("curl")
+        try "#!/bin/sh\nexit 0\n".write(to: fakeCurl, atomically: true, encoding: .utf8)
+        try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: fakeCurl.path)
+        let script = dir.appendingPathComponent("relay.sh")
+        try CloudRelay.relayScript(channel: "turbo-x", server: URL(string: "http://127.0.0.1:\(port)")!, shareTitles: true).write(to: script, atomically: true, encoding: .utf8)
+        func run(_ hook: [String: Any]) throws -> String {
+            let p = Process(); p.executableURL = URL(fileURLWithPath: "/bin/bash"); p.arguments = [script.path]
+            p.environment = ["PATH": dir.path + ":/usr/bin:/bin", "HOME": home.path, "NO_PROXY": "*", "no_proxy": "*"]
+            let i = Pipe(), o = Pipe(); p.standardInput = i; p.standardOutput = o
+            try p.run(); i.fileHandleForWriting.write(try JSONSerialization.data(withJSONObject: hook)); try i.fileHandleForWriting.close(); p.waitUntilExit()
+            return String(decoding: o.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+        }
+        _ = try run(["hook_event_name": "UserPromptSubmit", "session_id": "s1", "cwd": repo.path, "prompt": "fix"])
+        // A reply sent before this turn started is never delivered to it.
+        let base = home.appendingPathComponent(".claude/turbo-base-s1")
+        XCTAssertTrue(fm.fileExists(atPath: base.path))
+        try "one\ntwo\nthree\n".write(to: repo.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+        let stopOutput = try run(["hook_event_name": "Stop", "session_id": "s1", "cwd": repo.path])
+        let decision = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(stopOutput.utf8)) as? [String: String], "got: \(stopOutput)")
+        XCTAssertEqual(decision, ["decision": "block", "reason": "now add tests"])
+        // The same reply is never delivered twice.
+        XCTAssertEqual(try run(["hook_event_name": "Stop", "session_id": "s1", "cwd": repo.path]), "")
+    }
+
+    func testCancelledCloudReplyIsNotDelivered() throws {
+        let reply = CloudRelay.replyMessage(sessionID: "s", text: "x", replyID: "r1")
+        let cancel = CloudRelay.cancelMessage(sessionID: "s", replyID: "r1")
+        XCTAssertTrue(reply.contains(#""r":"r1""#))
+        XCTAssertTrue(cancel.contains(#""t":"cancel""#))
+        let hook = #"{"hook_event_name":"Stop","session_id":"s","continued":"r1"}"#
+        let event = try XCTUnwrap(EventParser.parseClaudeHook(Data(hook.utf8)))
+        XCTAssertTrue(event.continuedByReply)
+        XCTAssertEqual(event.continuedReplyID, "r1")
+    }
+}
+
+final class PlanUsageTests: XCTestCase {
+    func testLatestSampleWins() throws {
+        let json = #"{"version":2,"samples":[{"t":1791170000000,"org":"a","u":{"fh":3,"sd":9}},{"t":1791170556472,"org":"a","u":{"fh":7,"sd":10}},{"t":1791160000000,"org":"a","u":{"fh":50}}]}"#
+        let usage = try XCTUnwrap(PlanUsage.latest(in: Data(json.utf8)))
+        XCTAssertEqual(usage.fiveHour, 7)
+        XCTAssertEqual(usage.week, 10)
+        XCTAssertEqual(usage.recordedAt.timeIntervalSince1970, 1791170556.472, accuracy: 0.001)
+        XCTAssertFalse(usage.isHigh)
+        XCTAssertNil(PlanUsage.latest(in: Data("{}".utf8)))
+    }
+}
+
+final class WorktreeSnapshotTests: XCTestCase {
+    func testOnlyTheTurnsOwnChangesCount() {
+        // Already dirty before the turn: a.swift +3, and an untracked notes.md.
+        let start = WorktreeSnapshot(numstat: "3\t0\ta.swift\n", untracked: ["notes.md": 4])
+        // After: a.swift grew, b.swift edited, a new file, notes.md untouched.
+        let end = WorktreeSnapshot(numstat: "10\t1\ta.swift\n2\t2\tb.swift\n", untracked: ["notes.md": 4, "New.swift": 20])
+        let delta = end.since(start)
+        XCTAssertEqual(delta.files, 3)
+        XCTAssertEqual(delta.additions, 7 + 2 + 20)
+        XCTAssertEqual(delta.deletions, 1 + 2)
+        XCTAssertEqual(Set(delta.paths), ["a.swift", "b.swift", "New.swift"])
     }
 }

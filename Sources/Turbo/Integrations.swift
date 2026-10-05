@@ -32,6 +32,11 @@ enum Integrations {
         HookInstaller.isClaudeStopInstalled(try? Data(contentsOf: claudeSettingsURL))
     }
 
+    /// The Stop gate that hands your replies to Claude when its turn ends.
+    static var isClaudeReplyInstalled: Bool {
+        HookInstaller.isClaudeReplyInstalled(try? Data(contentsOf: claudeSettingsURL))
+    }
+
     /// The PermissionRequest hook that lets you Allow / Deny from Turbo.
     static var isClaudeApprovalInstalled: Bool {
         HookInstaller.isClaudeApprovalInstalled(try? Data(contentsOf: claudeSettingsURL))
