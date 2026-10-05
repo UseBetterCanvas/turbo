@@ -691,3 +691,86 @@ final class TranscriptTurnTests: XCTestCase {
         XCTAssertEqual(ClaudeTranscript.lastAssistantText(inJSONL: answered, currentTurnOnly: true), "new reply")
     }
 }
+
+final class CoworkTranscriptTests: XCTestCase {
+    /// The layout the Claude app uses now: each task runs Claude Code and keeps its transcript
+    /// at local_<id>/.claude/projects/<slug>/<uuid>.jsonl, with no "result" line at the end.
+    func testCoworkTranscriptLayout() throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent("turbo-cowork-t-\(UUID().uuidString)")
+        defer { try? fm.removeItem(at: root) }
+        let space = root.appendingPathComponent("2ce5ffac/acb2bdc7")
+        let task = space.appendingPathComponent("local_0aa0dafc")
+        let project = task.appendingPathComponent(".claude/projects/-Users-me-local-0aa0dafc-out")
+        try fm.createDirectory(at: project, withIntermediateDirectories: true)
+        try Data(#"{"title":"Plan the offsite","userSelectedFolders":["/Users/me/Offsite"]}"#.utf8)
+            .write(to: space.appendingPathComponent("local_0aa0dafc.json"))
+        let transcript = project.appendingPathComponent("2bcd6a7e.jsonl")
+        try Data().write(to: transcript)
+
+        let tailer = SessionLogTailer(source: CoworkSessionSource(root: root))
+        tailer.rediscoverInterval = 0
+        tailer.finishDelay = 5
+        var events: [AgentEvent] = []
+        tailer.onEvent = { events.append($0) }
+        let t0 = Date()
+        tailer.poll(now: t0)
+        XCTAssertTrue(events.isEmpty)
+
+        func append(_ lines: [String]) throws {
+            let handle = try FileHandle(forWritingTo: transcript)
+            handle.seekToEndOfFile()
+            handle.write(Data((lines.joined(separator: "\n") + "\n").utf8))
+            try handle.close()
+        }
+        try append([
+            #"{"type":"queue-operation","operation":"enqueue","sessionId":"x","timestamp":"t"}"#,
+            #"{"type":"user","message":{"role":"user","content":"Plan our team offsite"},"isSidechain":false}"#,
+            #"{"type":"attachment","attachment":{},"isSidechain":false}"#,
+            #"{"type":"last-prompt","leafUuid":"a","sessionId":"x"}"#,
+            #"{"type":"assistant","message":{"content":[{"type":"text","text":"Let me look."}]},"isSidechain":false}"#,
+            #"{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{}}]},"isSidechain":false}"#,
+            #"{"type":"user","message":{"content":[{"type":"tool_result","content":"ok"}]},"isSidechain":false}"#,
+            #"{"type":"assistant","message":{"content":[{"type":"text","text":"Here's the plan."}],"stop_reason":null},"isSidechain":false}"#,
+        ])
+        tailer.poll(now: t0.addingTimeInterval(1))
+        XCTAssertEqual(events.map(\.kind), [.promptSubmitted, .activity(tool: nil), .activity(tool: "Read"), .activity(tool: nil), .activity(tool: nil)])
+        let first = try XCTUnwrap(events.first)
+        XCTAssertEqual(first.agent, .cowork)
+        XCTAssertEqual(first.sessionID, "local_0aa0dafc")
+        XCTAssertEqual(first.title, "Plan the offsite")
+        XCTAssertEqual(first.cwd, "/Users/me/Offsite")
+        XCTAssertEqual(first.prompt, "Plan our team offsite")
+        XCTAssertEqual(first.transcriptPath, transcript.path)
+
+        // Still within the quiet window: not done yet.
+        events.removeAll()
+        tailer.poll(now: t0.addingTimeInterval(3))
+        XCTAssertTrue(events.isEmpty)
+        // Quiet long enough after a final-looking reply: the turn is done.
+        tailer.poll(now: t0.addingTimeInterval(7))
+        XCTAssertEqual(events.map(\.kind), [.turnComplete(summary: "Here's the plan.")])
+        // And only once.
+        tailer.poll(now: t0.addingTimeInterval(20))
+        XCTAssertEqual(events.count, 1)
+
+        // An explicit end_turn finishes right away.
+        events.removeAll()
+        try append([
+            #"{"type":"user","message":{"role":"user","content":[{"type":"text","text":"Add a budget"}]}}"#,
+            #"{"type":"assistant","message":{"content":[{"type":"text","text":"Budget added."}],"stop_reason":"end_turn"}}"#,
+        ])
+        tailer.poll(now: t0.addingTimeInterval(21))
+        XCTAssertEqual(events.map(\.kind), [.promptSubmitted, .turnComplete(summary: "Budget added.")])
+        tailer.poll(now: t0.addingTimeInterval(40))
+        XCTAssertEqual(events.count, 2)
+    }
+
+    func testTranscriptSidechainAndCommandsAreProgress() {
+        func kind(_ s: String) -> EventParser.RolloutLine? { EventParser.parseClaudeTranscriptLine(Data(s.utf8))?.kind }
+        XCTAssertEqual(kind(#"{"type":"user","isSidechain":true,"message":{"content":"sub task"}}"#), .event(.activity(tool: nil)))
+        XCTAssertEqual(kind(#"{"type":"user","message":{"content":"<command-name>/clear</command-name>"}}"#), .event(.activity(tool: nil)))
+        XCTAssertNil(kind(#"{"type":"user","isMeta":true,"message":{"content":"caveat"}}"#))
+        XCTAssertNil(kind(#"{"type":"queue-operation","operation":"enqueue"}"#))
+    }
+}

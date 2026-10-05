@@ -218,6 +218,23 @@ public enum EventParser {
         )
     }
 
+    /// A parsed transcript line, plus whether it may be the turn's last word.
+    public struct TranscriptLine: Equatable {
+        public var kind: RolloutLine
+        public var mayFinish = false
+        public var summary: String?
+
+        public init(kind: RolloutLine, mayFinish: Bool = false, summary: String? = nil) {
+            self.kind = kind
+            self.mayFinish = mayFinish
+            self.summary = summary
+        }
+
+        init(rollout: RolloutLine) {
+            self.init(kind: rollout)
+        }
+    }
+
     public enum RolloutLine: Equatable {
         case meta(id: String?, cwd: String?)
         case event(AgentEventKind)
@@ -296,6 +313,42 @@ public enum EventParser {
         case "result":
             if obj["parent_tool_use_id"] is String { return .event(.activity(tool: nil)) }
             return .event(.turnComplete(summary: obj["result"] as? String))
+        default:
+            return nil
+        }
+    }
+
+    /// One line of a Claude Code transcript (`~/.claude/projects/*/<session>.jsonl`, and the copy
+    /// Cowork keeps inside each task). There's no "turn done" line, so a message that ends without
+    /// asking for a tool is marked `mayFinish`: the turn is over unless more follows.
+    public static func parseClaudeTranscriptLine(_ line: Data) -> TranscriptLine? {
+        guard let obj = jsonObject(line) else { return nil }
+        let message = obj["message"] as? [String: Any]
+        let blocks = message?["content"] as? [[String: Any]] ?? []
+        let types = Set(blocks.compactMap { $0["type"] as? String })
+        let sidechain = obj["isSidechain"] as? Bool == true
+
+        switch obj["type"] as? String {
+        case "user":
+            guard message != nil, obj["isMeta"] as? Bool != true else { return nil }
+            if sidechain || types.contains("tool_result") { return TranscriptLine(kind: .event(.activity(tool: nil))) }
+            let text = (message?["content"] as? String)
+                ?? blocks.filter { $0["type"] as? String == "text" }.compactMap { $0["text"] as? String }.joined(separator: "\n")
+            // Slash-command plumbing is logged as "user" too.
+            if text.hasPrefix("<command") || text.hasPrefix("<local-command") { return TranscriptLine(kind: .event(.activity(tool: nil))) }
+            return TranscriptLine(kind: .prompt(text))
+        case "assistant":
+            if sidechain { return TranscriptLine(kind: .event(.activity(tool: nil))) }
+            if let tool = blocks.first(where: { $0["type"] as? String == "tool_use" })?["name"] as? String {
+                return TranscriptLine(kind: .event(.activity(tool: tool)))
+            }
+            let text = blocks.filter { $0["type"] as? String == "text" }.compactMap { $0["text"] as? String }
+                .joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+            if message?["stop_reason"] as? String == "end_turn" {
+                return TranscriptLine(kind: .event(.turnComplete(summary: text.isEmpty ? nil : text)))
+            }
+            // Thinking-only lines are progress; a text reply may be the last word.
+            return TranscriptLine(kind: .event(.activity(tool: nil)), mayFinish: !text.isEmpty, summary: text.isEmpty ? nil : text)
         default:
             return nil
         }
