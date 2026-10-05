@@ -74,8 +74,21 @@ public enum ClaudeTranscript {
         var seenRecords = Set<String>()
         var seenBlocks = Set<String>()
         for line in data.split(separator: 0x0A) {
-            guard let obj = EventParser.jsonObject(Data(line)), obj["isSidechain"] as? Bool != true,
-                  let message = obj["message"] as? [String: Any] else { continue }
+            guard let obj = EventParser.jsonObject(Data(line)), obj["isSidechain"] as? Bool != true else { continue }
+            // A message you sent while it was working is logged as a queued command.
+            if obj["type"] as? String == "attachment", let attachment = obj["attachment"] as? [String: Any],
+               attachment["type"] as? String == "queued_command" {
+                if let uuid = obj["uuid"] as? String, !seenRecords.insert(uuid).inserted { continue }
+                let date = (obj["timestamp"] as? String).flatMap(iso.date(from:)) ?? Date.distantPast
+                let blocks = attachment["prompt"] as? [[String: Any]] ?? []
+                let text = ((attachment["prompt"] as? String)
+                    ?? blocks.filter { $0["type"] as? String == "text" }.compactMap { $0["text"] as? String }.joined(separator: "\n"))
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                let images = imageDirectory.map { promptImages(blocks, into: $0) } ?? []
+                if !text.isEmpty || !images.isEmpty { add(.prompt, text.isEmpty ? nil : text, date, images: images) }
+                continue
+            }
+            guard let message = obj["message"] as? [String: Any] else { continue }
             if let uuid = obj["uuid"] as? String, !seenRecords.insert(uuid).inserted { continue }
             let messageID = message["id"] as? String
             let date = (obj["timestamp"] as? String).flatMap(iso.date(from:)) ?? Date.distantPast

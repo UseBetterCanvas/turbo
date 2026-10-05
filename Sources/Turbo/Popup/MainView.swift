@@ -181,7 +181,8 @@ private struct SidebarRow: View {
 
     var body: some View {
         let selected = model.selectedSessionID == session.id
-        ChatRow(session: session, now: now, compact: true, showsAction: false)
+        ChatRow(session: session, now: now, compact: true, showsAction: false,
+                onRemove: hovering ? { withAnimation(DS.Motion.base) { model.dismiss(session) } } : nil)
             .padding(.horizontal, 8)
             .padding(.vertical, 9)
             .background(
@@ -200,22 +201,6 @@ private struct SidebarRow: View {
                 model.selectedSessionID = session.id
                 model.popupPage = .home
                 model.markSeen(session)
-            }
-            .overlay(alignment: .trailing) {
-                // Clear it from the list right where you're looking.
-                if hovering {
-                    Button { withAnimation(DS.Motion.base) { model.dismiss(session) } } label: {
-                        Image(systemName: "xmark")
-                            .font(.system(size: 9, weight: .bold))
-                            .foregroundStyle(DS.Palette.textSecondary)
-                            .frame(width: 22, height: 22)
-                            .background(Circle().fill(DS.Palette.overlay))
-                    }
-                    .buttonStyle(PressableStyle())
-                    .hoverTip(session.phase.isActive ? "Remove (returns on new activity)" : "Remove")
-                    .padding(.trailing, 10)
-                    .transition(.opacity)
-                }
             }
             .contextMenu {
                 if model.canOpen(session) { Button("Open") { model.open(session) } }
@@ -480,7 +465,8 @@ private struct SessionPane: View {
                                     .padding(.top, 10)
                                     .padding(.bottom, 2)
                             }
-                            ThreadRow(item: item, session: session, lastInRun: isLastInRun(index))
+                            ThreadRow(item: item, session: session, lastInRun: isLastInRun(index), readAt: readAt(index, in: items),
+                                      showsRead: item.kind == .prompt && index == items.lastIndex { $0.kind == .prompt })
                         }
                         // Replies waiting for the turn to end, shown as sent-but-pending.
                         ForEach(model.queuedReplies[session.id] ?? []) { reply in
@@ -557,6 +543,18 @@ private struct SessionPane: View {
     }
 
     /// Reply bubbles in a row share one avatar, on the last of them, like Messages.
+    /// When the agent first did something after this prompt: that's when it "read" it.
+    private func readAt(_ index: Int, in items: [ThreadItem]) -> Date? {
+        guard items[index].kind == .prompt else { return nil }
+        // Only what's logged after this message counts (a step, a reply, a question for you), so
+        // a message queued mid-turn isn't marked read by work on the one before it.
+        for later in items[(index + 1)...] {
+            if later.kind == .prompt { return nil }
+            return later.date
+        }
+        return nil
+    }
+
     private func isLastInRun(_ index: Int) -> Bool {
         let list = items
         guard index + 1 < list.count else { return true }
@@ -601,6 +599,15 @@ private struct ThreadRow: View {
     let item: ThreadItem
     let session: AgentSession
     let lastInRun: Bool
+    /// When the agent picked this prompt up (its first step or reply after it).
+    var readAt: Date? = nil
+    /// "Read" goes under your latest message only, like iMessage.
+    var showsRead = false
+
+    /// A tapback once the agent's on it, before it starts typing back.
+    @ViewBuilder private var tapback: some View {
+        if readAt != nil { Tapback().offset(x: -10, y: -10).transition(.scale.combined(with: .opacity)) }
+    }
 
     var body: some View {
         switch item.kind {
@@ -608,11 +615,25 @@ private struct ThreadRow: View {
             HStack {
                 Spacer(minLength: 80)
                 VStack(alignment: .trailing, spacing: 4) {
-                    if !item.images.isEmpty { PromptImages(urls: item.images) }
-                    if let text = item.text, !text.isEmpty {
+                    let hasText = !(item.text ?? "").isEmpty
+                    if !item.images.isEmpty {
+                        PromptImages(urls: item.images)
+                            .overlay(alignment: .topLeading) { if !hasText { tapback } }
+                            .padding(.top, !hasText && readAt != nil ? 6 : 0)
+                    }
+                    if let text = item.text, hasText {
                         Bubble(text: text, fill: DS.Palette.brand, foreground: .white, mine: true, tail: lastInRun)
+                            .overlay(alignment: .topLeading) { tapback }
+                            .padding(.top, readAt != nil ? 6 : 0)
+                    }
+                    if showsRead, let readAt {
+                        Text("Read " + readAt.formatted(date: .omitted, time: .shortened))
+                            .font(DSFont.sans(10.5, .semibold))
+                            .foregroundStyle(DS.Palette.textTertiary)
+                            .padding(.trailing, 4)
                     }
                 }
+                .animation(DS.Motion.base, value: readAt != nil)
             }
         case .reply:
             HStack(alignment: .bottom, spacing: 8) {
@@ -705,13 +726,37 @@ private struct Bubble: View {
     let tail: Bool
 
     var body: some View {
-        MarkdownText(markdown: text, foreground: foreground)
+        Group {
+            // Your own messages stay exactly as typed (a pasted script isn't markdown).
+            if mine {
+                Text(text)
+                    .font(DSFont.sans(13.5, .medium))
+                    .foregroundStyle(foreground)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
+                MarkdownText(markdown: text, foreground: foreground)
+            }
+        }
             .padding(.horizontal, 13)
             .padding(.vertical, 8)
             .background(
                 BubbleShape(bottomLeading: !mine && tail ? 5 : 18, bottomTrailing: mine && tail ? 5 : 18)
                     .fill(fill)
             )
+    }
+}
+
+/// The little 👍 bubble on the corner of your message, like an iMessage tapback.
+private struct Tapback: View {
+    var body: some View {
+        Image(systemName: "hand.thumbsup.fill")
+            .font(.system(size: 10, weight: .bold))
+            .foregroundStyle(DS.Palette.textPrimary)
+            .frame(width: 24, height: 24)
+            .background(Circle().fill(DS.Palette.overlay))
+            .overlay(Circle().strokeBorder(DS.Palette.base, lineWidth: 2))
+            .help("Seen")
     }
 }
 

@@ -1187,6 +1187,12 @@ final class PlanUsageEdgeTests: XCTestCase {
         XCTAssertEqual(session.thread.last?.images, later)
         XCTAssertEqual(session.thread[0].images, event.promptImages)
 
+        // A message sent mid-turn (a queued command) is a prompt too, images and all.
+        let queued = #"{"type":"attachment","uuid":"q1","timestamp":"2026-10-05T05:01:11.316Z","attachment":{"type":"queued_command","prompt":[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"\#(png)"}},{"type":"text","text":"bad place for x"}]}}"#
+        let queuedItems = ClaudeTranscript.thread(inJSONL: Data(queued.utf8), imageDirectory: dir)
+        XCTAssertEqual(queuedItems.first?.text, "bad place for x")
+        XCTAssertEqual(queuedItems.first?.images, [url])
+
         // A big image record before the read window is still read whole.
         let big = Data(repeating: 0x41, count: 300_000).base64EncodedString()
         let record = #"{"type":"user","uuid":"u9","message":{"role":"user","content":[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"\#(big)"}},{"type":"text","text":"big one"}]}}"#
