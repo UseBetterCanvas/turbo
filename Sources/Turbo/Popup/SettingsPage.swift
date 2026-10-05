@@ -55,7 +55,7 @@ private struct ConnectionsSection: View {
             ConnectionRow(agent: .cowork, status: watch(.cowork, prefs.watchCoworkSessions), startsExpanded: false) {
                 Toggle("Cowork", isOn: $prefs.watchCoworkSessions).toggleStyle(BCSwitchStyle()).labelsHidden()
             } details: {
-                EmptyView()
+                CoworkPluginDetails()
             }
         }
         if let error { Callout(symbol: "", text: error, tone: .bad) }
@@ -254,7 +254,7 @@ private struct CloudSetupSteps: View {
         .confirmationDialog("Make a new channel?", isPresented: $confirmReset) {
             Button("New Channel", role: .destructive) { model.resetCloudChannel() }
         } message: {
-            Text("Environments using the old setup script stop reaching this Mac until you paste the new one.")
+            Text("Environments using the old setup script, and an installed Cowork plugin, stop reaching this Mac until you paste the new script and upload the new plugin.")
         }
     }
 
@@ -450,21 +450,14 @@ private struct IslandSection: View {
                 .frame(width: 150)
             }
             RowDivider()
-            SettingRow(title: "Announce sessions longer than", detail: "Quicker ones finish quietly.") {
+            SettingRow(title: "Skip Alerts for Quick Turns", detail: "Turns shorter than this finish quietly.") {
                 Stepper("\(Int(prefs.minimumCookSeconds)) sec", value: $prefs.minimumCookSeconds, in: 0...300, step: 5)
                     .font(DS.Typography.bodyStrong.monospacedDigit())
             }
             RowDivider()
-            SettingRow(title: "Keep the done card up for", detail: "Hovering keeps it open.") {
-                Stepper("\(Int(prefs.celebrateSeconds)) sec", value: $prefs.celebrateSeconds, in: 2...60, step: 1)
-                    .font(DS.Typography.bodyStrong.monospacedDigit())
-            }
-            RowDivider()
-            ToggleRow(title: "Click a Card to Open Its Session", isOn: $prefs.returnToTerminalOnClick)
-            RowDivider()
             ToggleRow(title: "Show Each New Step", detail: "The tiny island grows for a moment to show what the session it tracks is doing now.", isOn: $prefs.showStepPeeks)
             RowDivider()
-            SettingRow(title: "Sound when done") {
+            SettingRow(title: "Sound When Done") {
                 HStack(spacing: DS.Space.s) {
                     if prefs.playSound {
                         Picker("Sound", selection: $prefs.soundName) {
@@ -513,13 +506,9 @@ private struct VisualizerSection: View {
                     .frame(width: 300)
             }
             RowDivider()
-            ToggleRow(title: "Open Automatically When Something Starts", isOn: $prefs.visualizerAutoOpen)
-            RowDivider()
             ToggleRow(title: "Move With Your Music", detail: musicNote, isOn: $prefs.visualizerListens)
             RowDivider()
-            ToggleRow(title: "Full Screen", isOn: $prefs.visualizerFullScreen)
-            RowDivider()
-            ToggleRow(title: "Close When It's Done", isOn: $prefs.visualizerAutoClose)
+            ToggleRow(title: "Open When a Session Starts", isOn: $prefs.visualizerAutoOpen)
         }
     }
 
@@ -553,7 +542,7 @@ private struct GeneralSection: View {
 
     var body: some View {
         SettingsGroup(title: "General") {
-            SettingRow(title: "Open cloud sessions in", detail: openHint) {
+            SettingRow(title: "Open Cloud Sessions In", detail: openHint) {
                 BCSegmented(options: OpenTarget.allCases.map { SegmentOption(value: $0, label: $0.title) }, selection: $prefs.openSessionsIn)
                     .frame(width: 180)
             }
@@ -564,16 +553,10 @@ private struct GeneralSection: View {
             ))
             RowDivider()
             UpdateRow(updater: model.updater)
-            RowDivider()
-            ToggleRow(title: "Install Updates Automatically", isOn: $prefs.autoUpdate)
-            RowDivider()
-            SettingRow(title: "Welcome Tour") {
-                Button("Show") { model.showOnboarding() }.buttonStyle(SecondaryButtonStyle())
-            }
         }
 
         HStack {
-            Text("Turbo \(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev") · BetterCampus")
+            Text("Turbo build \(model.updater.installedBuild.map(String.init) ?? "dev") · BetterCampus")
                 .font(DS.Typography.caption)
                 .foregroundStyle(DS.Palette.textTertiary)
             Spacer()
@@ -700,5 +683,52 @@ struct AgentSetupCard<Accessory: View, Footer: View>: View {
 extension AgentSetupCard where Footer == EmptyView {
     init(agent: Agent, status: (String, StatusTone), @ViewBuilder accessory: @escaping () -> Accessory) {
         self.init(agent: agent, status: status, accessory: accessory) { EmptyView() }
+    }
+}
+
+/// Cowork tasks on your Mac are read from disk. Tasks that run in the cloud need Turbo's plugin,
+/// which reports them through your private channel like the cloud setup script does.
+private struct CoworkPluginDetails: View {
+    @EnvironmentObject private var model: AppModel
+    @State private var savedTo: URL?
+    @State private var error: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: DS.Space.s) {
+            if model.coworkPluginOutdated {
+                Text("Your Cowork plugin is out of date (the channel or sharing changed). Get it again and upload it in place of the old one.")
+                    .font(DS.Typography.caption)
+                    .foregroundStyle(DS.Palette.gold)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Text("Tasks that run on this Mac show up on their own. For Cowork tasks that run in the cloud, add Turbo's plugin to Cowork once.")
+                .font(DS.Typography.caption)
+                .foregroundStyle(DS.Palette.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack(spacing: DS.Space.s) {
+                Button {
+                    do {
+                        savedTo = try model.saveCoworkPlugin()
+                        error = nil
+                    } catch {
+                        self.error = "Couldn't save the plugin: \(error.localizedDescription)"
+                    }
+                } label: {
+                    Label(savedTo == nil ? "Get Cowork Plugin" : "Saved to Downloads", systemImage: savedTo == nil ? "puzzlepiece.extension" : "checkmark")
+                }
+                .buttonStyle(PrimaryButtonStyle())
+                if savedTo != nil {
+                    Button("Show in Finder") { if let savedTo { NSWorkspace.shared.activateFileViewerSelecting([savedTo]) } }
+                        .buttonStyle(SecondaryButtonStyle())
+                }
+            }
+            if savedTo != nil {
+                Text("In Claude, open Cowork's plugins, choose Upload, and pick Turbo-for-Cowork.zip. New cloud tasks then show up here, with Stop.")
+                    .font(DS.Typography.caption)
+                    .foregroundStyle(DS.Palette.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if let error { Text(error).font(DS.Typography.caption).foregroundStyle(DS.Palette.bad) }
+        }
     }
 }

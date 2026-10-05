@@ -40,7 +40,9 @@ public enum CloudRelay {
     /// Before a tool call it also checks, at most every 5 seconds, whether you pressed Stop.
     /// `shareTitles` also sends the first few words of each prompt, so cloud sessions get a
     /// name instead of just the repo. Off unless you turn it on.
-    public static func relayScript(channel: String, server: URL = defaultServer, shareTitles: Bool = false) -> String {
+    /// `source` tags where the session runs ("cowork" for the Cowork plugin), so the Mac shows it
+    /// as the right kind of session.
+    public static func relayScript(channel: String, server: URL = defaultServer, shareTitles: Bool = false, source: String? = nil) -> String {
         // Opt-in: the prompt (first 500 characters) and Claude's final reply (first 1,500), read
         // from the session's own transcript when the turn stops. No single quotes: this python
         // runs inside a single-quoted shell string.
@@ -94,7 +96,7 @@ public enum CloudRelay {
             out["activity"] = (str(act).splitlines() or [""])[0][:80]
         \(titleLines)cwd = str(d.get("cwd") or "").rstrip("/")
         out["cwd"] = os.path.basename(cwd) or cwd
-        out["remote_session_id"] = os.environ.get("CLAUDE_CODE_REMOTE_SESSION_ID", "")
+        out["remote_session_id"] = os.environ.get("CLAUDE_CODE_REMOTE_SESSION_ID", "")\(source.map { "\nout[\"source\"] = \"\($0)\"" } ?? "")
         print(json.dumps(out))
         stop = False
         if d.get("hook_event_name") == "PreToolUse":
@@ -159,4 +161,48 @@ public enum CloudRelay {
         # --- end Turbo ---
         """
     }
+
+    // MARK: Cowork plugin
+
+    /// Turbo as a Cowork plugin: the same relay, run by Cowork's plugin hooks, for Cowork tasks
+    /// that run in the cloud. Returns the plugin's files (path → contents); the relay script is the
+    /// one file that must be executable.
+    /// What a saved plugin was built with. When this changes (new channel, sharing turned on or
+    /// off), the installed plugin is out of date and needs uploading again.
+    public static func coworkPluginSignature(channel: String, shareTitles: Bool) -> String {
+        "\(channel)|\(shareTitles ? "share" : "private")|v1"
+    }
+
+    public static func coworkPlugin(channel: String, server: URL = defaultServer, shareTitles: Bool = false) -> [String: String] {
+        // Quoted, so an install path with spaces still runs.
+        let command = "\"${CLAUDE_PLUGIN_ROOT}/hooks/turbo-relay.sh\""
+        var hooks: [String: Any] = [:]
+        for event in events {
+            var group: [String: Any] = ["hooks": [["type": "command", "command": command]]]
+            if event == "PreToolUse" || event == "PostToolUse" { group["matcher"] = "*" }
+            hooks[event] = [group]
+        }
+        let manifest: [String: Any] = [
+            "name": "turbo",
+            "version": "1.0.0",
+            "description": "Shows your Cowork tasks in Turbo, on your Mac's notch: progress, steps, done and Stop.",
+            "author": ["name": "BetterCampus"],
+        ]
+        func json(_ object: Any) -> String {
+            let data = (try? JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys])) ?? Data()
+            return String(decoding: data, as: UTF8.self)
+        }
+        return [
+            ".claude-plugin/plugin.json": json(manifest),
+            "hooks/hooks.json": json(["hooks": hooks]),
+            "hooks/turbo-relay.sh": relayScript(channel: channel, server: server, shareTitles: shareTitles, source: "cowork"),
+            "README.md": """
+            # Turbo for Cowork
+
+            Reports what your Cowork tasks are doing to the Turbo app on your Mac, through your private
+            channel. It sends the event, the folder name and Claude's one-line description of each step\(shareTitles ? ", plus your prompts and Claude's final replies" : ""). Never files.
+            """,
+        ]
+    }
 }
+

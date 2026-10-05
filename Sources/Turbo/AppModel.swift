@@ -245,7 +245,18 @@ final class AppModel: ObservableObject {
             self.sessions = self.store.sorted
         })
 
-        relay.onEvent = { [weak self] event in self?.handle(event) }
+        relay.onEvent = { [weak self] event in
+            guard let self else { return }
+            // Cowork switched off: ignore what the Cowork plugin reports too.
+            if event.agent == .cowork && !self.preferences.watchCoworkSessions { return }
+            var event = event
+            // Sharing turned off: show nothing a not-yet-updated script or plugin still sends.
+            if !self.preferences.cloudShareTitles {
+                event.prompt = nil
+                if case .turnComplete = event.kind { event.kind = .turnComplete(summary: nil) }
+            }
+            self.handle(event)
+        }
         relay.onState = { [weak self] state in self?.relayState = state }
         relay.onMessage = { [weak self] in
             self?.lastRelayMessage = Date()
@@ -705,7 +716,9 @@ final class AppModel: ObservableObject {
         case .claude: return claudeStopReady ? .nextStep : nil
         case .codex: return session.logPath == nil ? nil : .interrupt
         case .cloud: return preferences.cloudEnabled ? .cloud : nil
-        case .cowork, .codexCloud: return nil
+        // A Cowork task on this Mac has a log; one reported by the plugin runs in the cloud.
+        case .cowork: return session.logPath == nil && preferences.cloudEnabled ? .cloud : nil
+        case .codexCloud: return nil
         }
     }
 
@@ -929,6 +942,47 @@ final class AppModel: ObservableObject {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(cloudSetupScript, forType: .string)
         preferences.copiedCloudScript = cloudSetupScript
+    }
+
+    /// The Cowork plugin you saved was built for a different channel or sharing choice.
+    var coworkPluginOutdated: Bool {
+        !preferences.savedCoworkPlugin.isEmpty
+            && preferences.savedCoworkPlugin != CloudRelay.coworkPluginSignature(channel: preferences.cloudChannel, shareTitles: preferences.cloudShareTitles)
+    }
+
+    /// Writes Turbo-for-Cowork.zip to Downloads and returns it. Only once it's saved does Turbo
+    /// start listening for Cowork through the private channel.
+    func saveCoworkPlugin() throws -> URL {
+        let fm = FileManager.default
+        let channel = preferences.cloudChannel, share = preferences.cloudShareTitles
+        let scratch = fm.temporaryDirectory.appendingPathComponent("turbo-plugin-\(UUID().uuidString)", isDirectory: true)
+        defer { try? fm.removeItem(at: scratch) }
+        let work = scratch.appendingPathComponent("turbo", isDirectory: true)
+        for (path, contents) in CloudRelay.coworkPlugin(channel: channel, shareTitles: share) {
+            let url = work.appendingPathComponent(path)
+            try fm.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try contents.write(to: url, atomically: true, encoding: .utf8)
+            if path.hasSuffix(".sh") { try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path) }
+        }
+        // Build the new zip beside the work files, then swap it in, so a failure keeps the old one.
+        let fresh = scratch.appendingPathComponent("Turbo-for-Cowork.zip")
+        let ditto = Process()
+        ditto.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
+        ditto.arguments = ["-c", "-k", "--keepParent", work.path, fresh.path]
+        try ditto.run()
+        ditto.waitUntilExit()
+        guard ditto.terminationStatus == 0 else { throw CocoaError(.fileWriteUnknown) }
+        let downloads = fm.urls(for: .downloadsDirectory, in: .userDomainMask).first ?? fm.homeDirectoryForCurrentUser
+        let zip = downloads.appendingPathComponent("Turbo-for-Cowork.zip")
+        if fm.fileExists(atPath: zip.path) {
+            _ = try fm.replaceItemAt(zip, withItemAt: fresh)
+        } else {
+            try fm.moveItem(at: fresh, to: zip)
+        }
+        preferences.savedCoworkPlugin = CloudRelay.coworkPluginSignature(channel: channel, shareTitles: share)
+        if !preferences.watchCoworkSessions { preferences.watchCoworkSessions = true }
+        if !preferences.cloudEnabled { preferences.cloudEnabled = true }
+        return zip
     }
 
     var cloudSetupScript: String {

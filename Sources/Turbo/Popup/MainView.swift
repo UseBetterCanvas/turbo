@@ -85,17 +85,6 @@ private struct MainSidebar: View {
 
             Spacer(minLength: 0)
 
-            HStack(spacing: 8) {
-                ConnectedAgentsChip()
-                ChipButton(action: { model.setQuiet(for: model.isQuiet ? nil : 3600) }) {
-                    Image(systemName: model.isQuiet ? "bell.slash.fill" : "bell").font(.system(size: 11, weight: .semibold))
-                    Text(model.isQuiet ? "Quiet" : "Alerts On")
-                }
-                .help(model.isQuiet ? "Turn alerts back on" : "Quiet for 1 hour")
-            }
-            .padding(.horizontal, 12)
-            .padding(.bottom, 10)
-
             Rectangle().fill(Color.white.opacity(0.06)).frame(height: 1).padding(.horizontal, 12)
 
             UserRow()
@@ -217,7 +206,9 @@ private struct UserRow: View {
                 Text(summary).font(DSFont.sans(11.5, .medium)).foregroundStyle(DS.Palette.textSecondary).lineLimit(1)
             }
             Spacer(minLength: 4)
-            RoundIconButton(symbol: "info.circle", help: "Welcome tour", size: 28) { model.showOnboarding() }
+            RoundIconButton(symbol: model.isQuiet ? "bell.slash.fill" : "bell", help: model.isQuiet ? "Quiet. Click to turn alerts back on" : "Quiet for 1 hour", size: 28) {
+                model.setQuiet(for: model.isQuiet ? nil : 3600)
+            }
             RoundIconButton(symbol: "gearshape.fill", help: "Settings", size: 28) { model.popupPage = .settings }
         }
     }
