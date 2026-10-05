@@ -890,43 +890,146 @@ private extension View {
     }
 }
 
-/// The 5-hour session limit first, then the week, from the Claude app's own numbers.
+/// The 5-hour session limit first, then the week, from the Claude app's own numbers. Hover it
+/// for the full picture: both limits, when they reset, and a link to the breakdown.
 struct UsageMeter: View {
+    @EnvironmentObject private var model: AppModel
     let usage: PlanUsage
     var compact = false
+    @State private var hovering = false
+    @State private var showing = false
 
     var body: some View {
         HStack(spacing: 6) {
-            ring(usage.fiveHour)
+            UsageRing(percent: usage.fiveHour)
             Text(compact ? "\(usage.fiveHour)%" : "Session \(usage.fiveHour)%")
-                .foregroundStyle(color(usage.fiveHour))
+                .foregroundStyle(UsageRing.color(usage.fiveHour))
             if let week = usage.week, !compact {
-                Text("· Week \(week)%").foregroundStyle(week >= 80 ? color(week) : DS.Palette.textTertiary)
+                Text("· Week \(week)%").foregroundStyle(week >= 80 ? UsageRing.color(week) : DS.Palette.textTertiary)
             }
         }
         .font(DSFont.sans(11.5, .semibold).monospacedDigit())
-        .help(tooltip)
+        .lineLimit(1)
+        .fixedSize()
+        .contentShape(Rectangle())
+        .onHover { inside in
+            hovering = inside
+            DispatchQueue.main.asyncAfter(deadline: .now() + (inside ? 0.25 : 0.45)) {
+                // Stay open while the pointer is on the meter or on the panel itself.
+                let keep = hovering || model.usagePanelHovered
+                if keep != showing { showing = keep }
+            }
+        }
+        .onTapGesture { showing.toggle() }
+        .popover(isPresented: $showing, arrowEdge: .bottom) {
+            UsageDetails(usage: usage, onHover: { inside in
+                model.usagePanelHovered = inside
+                if !inside {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) {
+                        if !hovering && !model.usagePanelHovered { showing = false }
+                    }
+                }
+            })
+            .environmentObject(model)
+        }
+        .onChange(of: showing) { open in model.setUsageDetailsOpen(open) }
     }
+}
 
-    private var tooltip: String {
-        var text = "Claude plan usage: \(usage.fiveHour)% of the 5-hour session limit"
-        if let week = usage.week { text += ", \(week)% of the weekly limit" }
-        let time = usage.recordedAt.formatted(date: .omitted, time: .shortened)
-        return text + ". As of \(time)."
-    }
+/// A small ring that fills with the percentage.
+struct UsageRing: View {
+    let percent: Int
+    var size: CGFloat = 13
 
-    private func ring(_ percent: Int) -> some View {
+    var body: some View {
         ZStack {
             Circle().stroke(Color.white.opacity(0.14), lineWidth: 2.5)
             Circle()
                 .trim(from: 0, to: CGFloat(min(max(percent, 0), 100)) / 100)
-                .stroke(color(percent), style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
+                .stroke(Self.color(percent), style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
                 .rotationEffect(.degrees(-90))
         }
-        .frame(width: 13, height: 13)
+        .frame(width: size, height: size)
     }
 
-    private func color(_ percent: Int) -> Color {
+    static func color(_ percent: Int) -> Color {
         percent >= 95 ? DS.Palette.bad : percent >= 80 ? DS.Palette.gold : DS.Palette.textSecondary
+    }
+}
+
+/// The panel behind the meter, like Claude's own: each limit with a bar and when it resets.
+struct UsageDetails: View {
+    let usage: PlanUsage
+    var onHover: (Bool) -> Void = { _ in }
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 30)) { context in
+            VStack(alignment: .leading, spacing: 14) {
+                Button {
+                    NSWorkspace.shared.open(URL(string: "https://claude.ai/settings/usage")!)
+                } label: {
+                    HStack {
+                        Text("Plan usage limits").font(DSFont.sans(12.5, .semibold)).foregroundStyle(DS.Palette.textSecondary)
+                        Spacer()
+                        Image(systemName: "arrow.up.right").font(.system(size: 10, weight: .bold)).foregroundStyle(DS.Palette.textTertiary)
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+
+                limit("Session limit", percent: usage.fiveHour, resets: usage.sessionResetsAt, now: context.date, trend: usage.sessionTrend)
+                if let week = usage.week {
+                    limit("Weekly · all models", percent: week, resets: usage.weekResetsAt, now: context.date, trend: [])
+                }
+
+                Rectangle().fill(Color.white.opacity(0.08)).frame(height: 1)
+                HStack {
+                    Button("See Detailed Breakdown") { NSWorkspace.shared.open(URL(string: "https://claude.ai/settings/usage")!) }
+                        .buttonStyle(SecondaryButtonStyle())
+                    Spacer()
+                    Text("As of \(usage.recordedAt.formatted(date: .omitted, time: .shortened))")
+                        .font(DSFont.sans(11, .medium))
+                        .foregroundStyle(DS.Palette.textTertiary)
+                }
+            }
+            .padding(16)
+            .frame(width: 340)
+        }
+        .background(DS.Palette.card)
+        .environment(\.colorScheme, .dark)
+        .onHover(perform: onHover)
+    }
+
+    private func limit(_ title: String, percent: Int, resets: Date?, now: Date, trend: [Int]) -> some View {
+        VStack(alignment: .leading, spacing: 7) {
+            HStack(alignment: .firstTextBaseline) {
+                Text(title).font(DSFont.sans(13.5, .semibold)).foregroundStyle(DS.Palette.textPrimary)
+                Spacer()
+                if let resets {
+                    Text(resetText(resets, now: now)).font(DSFont.sans(12, .medium)).foregroundStyle(DS.Palette.textTertiary)
+                }
+                Text("\(percent)%").font(DSFont.sans(13, .bold).monospacedDigit()).foregroundStyle(percent >= 80 ? UsageRing.color(percent) : DS.Palette.textPrimary)
+            }
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    Capsule().fill(Color.white.opacity(0.08))
+                    Capsule()
+                        .fill(percent >= 80 ? UsageRing.color(percent) : DS.Palette.brand)
+                        .frame(width: max(4, geo.size.width * CGFloat(min(max(percent, 0), 100)) / 100))
+                }
+            }
+            .frame(height: 5)
+        }
+    }
+
+    /// "Resets in about 3 hr 26 min", or the day and time when it's further off.
+    private func resetText(_ date: Date, now: Date) -> String {
+        let left = date.timeIntervalSince(now)
+        guard left > 0 else { return "" }
+        if left < 86_400 {
+            let h = Int(left) / 3600, m = (Int(left) % 3600) / 60
+            return "Resets in about " + (h > 0 ? "\(h) hr \(m) min" : "\(m) min")
+        }
+        return "Resets about " + date.formatted(.dateTime.weekday(.abbreviated).hour().minute())
     }
 }
