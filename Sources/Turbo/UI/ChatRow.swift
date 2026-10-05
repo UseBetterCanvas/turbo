@@ -68,6 +68,8 @@ struct ChatRow: View {
     /// The pop-up's sidebar uses a tighter row.
     var compact = false
     var showsAction = true
+    /// Shown in place of the time while you hover (the sidebar's remove button).
+    var onRemove: (() -> Void)? = nil
 
     var body: some View {
         HStack(spacing: compact ? 10 : 12) {
@@ -91,6 +93,22 @@ struct ChatRow: View {
                         .foregroundStyle(session.isWaiting ? DS.Palette.gold : DS.Palette.textSecondary)
                         .lineLimit(1)
                         .fixedSize()
+                        // The remove button takes the time's spot, so nothing else gets covered.
+                        .opacity(onRemove == nil ? 1 : 0)
+                        .overlay(alignment: .trailing) {
+                            if let onRemove {
+                                Button(action: onRemove) {
+                                    Image(systemName: "xmark")
+                                        .font(.system(size: 8.5, weight: .bold))
+                                        .foregroundStyle(DS.Palette.textSecondary)
+                                        .frame(width: 18, height: 18)
+                                        .background(Circle().fill(Color.white.opacity(0.1)))
+                                        .contentShape(Circle())
+                                }
+                                .buttonStyle(PressableStyle())
+                                .help("Remove from Turbo")
+                            }
+                        }
                 }
                 Text(model.approvalErrors[session.id] ?? session.preview(now: now))
                     .font(DSFont.sans(compact ? 12 : 12.5, .medium))
@@ -341,7 +359,7 @@ private struct HoverTip: ViewModifier {
                     withAnimation(DS.Motion.base) { shown = false }
                 }
             }
-            .overlay(alignment: .top) {
+            .overlay(alignment: .leading) {
                 if shown {
                     Text(text)
                         .font(DSFont.sans(11, .semibold))
@@ -352,7 +370,8 @@ private struct HoverTip: ViewModifier {
                         .frame(height: 22)
                         .background(Capsule().fill(DS.Palette.overlay))
                         .overlay(Capsule().strokeBorder(Color.white.opacity(0.1), lineWidth: 1))
-                        .offset(y: -28)
+                        // Sits just left of the button: inside the row, so nothing clips it.
+                        .alignmentGuide(.leading) { d in d[.trailing] + 6 }
                         .transition(.opacity)
                         .allowsHitTesting(false)
                 }

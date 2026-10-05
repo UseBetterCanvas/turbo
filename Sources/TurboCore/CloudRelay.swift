@@ -64,6 +64,15 @@ public enum CloudRelay {
                         continue
                     if o.get("isSidechain"):
                         continue
+                    att = o.get("attachment") if isinstance(o.get("attachment"), dict) else {}
+                    if o.get("type") == "attachment" and att.get("type") == "queued_command" and isinstance(att.get("prompt"), list):
+                        # A message you sent mid-turn: its images count for this turn too.
+                        for b in att["prompt"]:
+                            src = b.get("source") if isinstance(b, dict) and b.get("type") == "image" else None
+                            if isinstance(src, dict) and src.get("type") == "base64" and len(pending_imgs) < 3:
+                                ext = {"image/jpeg": "jpg", "image/gif": "gif", "image/webp": "webp"}.get(src.get("media_type"), "png")
+                                pending_imgs.append((str(src.get("data") or ""), ext))
+                        continue
                     c0 = (o.get("message") or {}).get("content")
                     if o.get("type") == "user" and not (isinstance(c0, list) and any(isinstance(b, dict) and b.get("type") == "tool_result" for b in c0)):
                         # The prompt that started this turn: its pasted images go up after the Stop check.
