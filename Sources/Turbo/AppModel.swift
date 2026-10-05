@@ -890,7 +890,11 @@ final class AppModel: ObservableObject {
         Task {
             var links: [(name: String, url: String)] = []
             for file in attachments {
-                guard let data = try? Data(contentsOf: file), data.count < 15_000_000 else { continue }
+                // Check the size first, then read off the main actor so a big or slow file can't stall the UI.
+                let size = (try? file.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? .max
+                guard size < 15_000_000,
+                      let data = await Task.detached(operation: { try? Data(contentsOf: file) }).value,
+                      data.count < 15_000_000 else { continue }
                 var request = URLRequest(url: target)
                 request.httpMethod = "PUT"
                 request.setValue(file.lastPathComponent, forHTTPHeaderField: "Filename")
