@@ -451,7 +451,8 @@ private struct SessionPane: View {
             }
             ComposerBar(session: session)
         }
-        .task(id: session.lastActivityAt) {
+        // Re-read when anything changes, including a final reply that lands after the turn ends.
+        .task(id: "\(session.lastActivityAt.timeIntervalSince1970)|\(session.summary ?? "")|\(session.thread.count)") {
             guard let path = session.transcriptPath else { return }
             let thread = await Task.detached(priority: .utility) { ClaudeTranscript.thread(atPath: path) }.value
             guard !Task.isCancelled else { return }
@@ -468,7 +469,12 @@ private struct SessionPane: View {
             if case let .needsInput(message) = session.phase {
                 base.append(ThreadItem(id: next, kind: .needs, text: message, date: session.needsInputSince ?? Date()))
                 next += 1
-            } else if case .done = session.phase {
+            } else if case let .done(summary) = session.phase {
+                // The transcript may not have the final reply flushed yet; the store does.
+                if let summary, !summary.isEmpty, !base.suffix(3).contains(where: { $0.kind == .reply && $0.text?.hasPrefix(String(summary.prefix(40))) == true }) {
+                    base.append(ThreadItem(id: next, kind: .reply, text: summary, date: session.finishedAt ?? Date()))
+                    next += 1
+                }
                 base.append(ThreadItem(id: next, kind: .finished(failed: session.failed), text: nil, date: session.finishedAt ?? Date()))
             }
         }
@@ -619,7 +625,6 @@ private struct Bubble: View {
             .font(DSFont.sans(13.5, .medium))
             .foregroundStyle(foreground)
             .textSelection(.enabled)
-            .lineLimit(18)
             .fixedSize(horizontal: false, vertical: true)
             .padding(.horizontal, 13)
             .padding(.vertical, 8)

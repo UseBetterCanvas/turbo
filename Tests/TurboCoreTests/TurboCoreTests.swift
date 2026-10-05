@@ -826,6 +826,27 @@ final class CloudReplyTests: XCTestCase {
         // And the Mac reads it as the turn's summary.
         let envelope = try JSONSerialization.data(withJSONObject: ["event": "message", "id": "1", "message": String(firstLine)])
         XCTAssertEqual(EventParser.parseRelayLine(envelope)?.event?.kind, .turnComplete(summary: "Fixed the bug."))
+
+        // A turn that ends without a reply never borrows the previous turn's.
+        try [
+            #"{"type":"user","message":{"content":"first"}}"#,
+            #"{"type":"assistant","message":{"content":[{"type":"text","text":"Old reply."}]}}"#,
+            #"{"type":"user","message":{"content":"second"}}"#,
+            #"{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{}}]}}"#,
+        ].joined(separator: "\n").write(to: transcript, atomically: true, encoding: .utf8)
+        let again = Process()
+        again.executableURL = python
+        again.arguments = ["-c", String(script[start..<end])]
+        let input2 = Pipe(), output2 = Pipe()
+        again.standardInput = input2
+        again.standardOutput = output2
+        try again.run()
+        input2.fileHandleForWriting.write(hook)
+        try input2.fileHandleForWriting.close()
+        again.waitUntilExit()
+        let line2 = String(decoding: output2.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self).split(separator: "\n").first ?? ""
+        let out2 = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(line2.utf8)) as? [String: Any])
+        XCTAssertNil(out2["reply"])
     }
 
     func testThreadRecordsTheConversation() {
@@ -865,5 +886,22 @@ final class TranscriptThreadTests: XCTestCase {
         XCTAssertEqual(items.map(\.kind), [.prompt, .reply, .step(tool: "Read"), .step(tool: "Bash"), .reply])
         XCTAssertEqual(items.map(\.text), ["Fix the login bug", "Looking now.", "Login.swift", "Run tests", "Fixed it.\n\nTests pass."])
         XCTAssertEqual(items.first?.date, ISO8601DateFormatter().date(from: "2026-10-05T10:00:00Z"))
+    }
+}
+
+final class TranscriptThreadEdgeTests: XCTestCase {
+    func testStringRepliesAndRepeatedRecords() {
+        let lines = [
+            #"{"type":"user","uuid":"u1","message":{"role":"user","content":"hi"}}"#,
+            #"{"type":"assistant","uuid":"a1","message":{"id":"m1","content":[{"type":"text","text":"One"}]}}"#,
+            #"{"type":"assistant","uuid":"a1","message":{"id":"m1","content":[{"type":"text","text":"One"}]}}"#,
+            #"{"type":"assistant","uuid":"a2","message":{"id":"m1","content":[{"type":"text","text":"One"}]}}"#,
+            #"{"type":"assistant","uuid":"a3","message":{"id":"m2","content":[{"type":"tool_use","id":"t1","name":"Bash","input":{}}]}}"#,
+            #"{"type":"assistant","uuid":"a4","message":{"id":"m2","content":[{"type":"tool_use","id":"t1","name":"Bash","input":{}}]}}"#,
+            #"{"type":"assistant","uuid":"a5","message":{"content":"Plain string reply"}}"#,
+        ].joined(separator: "\n")
+        let items = ClaudeTranscript.thread(inJSONL: Data(lines.utf8))
+        XCTAssertEqual(items.map(\.kind), [.prompt, .reply, .step(tool: "Bash"), .reply])
+        XCTAssertEqual(items.map(\.text), ["hi", "One", nil, "Plain string reply"])
     }
 }

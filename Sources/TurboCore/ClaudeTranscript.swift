@@ -54,9 +54,14 @@ public enum ClaudeTranscript {
             }
             items.append(ThreadItem(id: items.count + 1, kind: kind, text: text, date: date))
         }
+        // Transcripts can repeat a record (snapshots, resumes); count each one once.
+        var seenRecords = Set<String>()
+        var seenBlocks = Set<String>()
         for line in data.split(separator: 0x0A) {
             guard let obj = EventParser.jsonObject(Data(line)), obj["isSidechain"] as? Bool != true,
                   let message = obj["message"] as? [String: Any] else { continue }
+            if let uuid = obj["uuid"] as? String, !seenRecords.insert(uuid).inserted { continue }
+            let messageID = message["id"] as? String
             let date = (obj["timestamp"] as? String).flatMap(iso.date(from:)) ?? Date.distantPast
             let blocks = message["content"] as? [[String: Any]] ?? []
             switch obj["type"] as? String {
@@ -68,7 +73,16 @@ public enum ClaudeTranscript {
                 guard !trimmed.isEmpty, !trimmed.hasPrefix("<command"), !trimmed.hasPrefix("<local-command") else { continue }
                 add(.prompt, trimmed, date)
             case "assistant":
-                for block in blocks {
+                if let text = (message["content"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty {
+                    add(.reply, text, date)
+                    continue
+                }
+                for (index, block) in blocks.enumerated() {
+                    // The same block of the same message logged twice is one block.
+                    if let messageID {
+                        let key = "\(messageID)#\(index)#\(block["type"] as? String ?? "")#\((block["text"] as? String)?.prefix(64) ?? "")#\(block["id"] as? String ?? "")"
+                        if !seenBlocks.insert(key).inserted { continue }
+                    }
                     switch block["type"] as? String {
                     case "text":
                         if let text = (block["text"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty {

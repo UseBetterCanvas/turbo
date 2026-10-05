@@ -58,7 +58,12 @@ public enum CloudRelay {
                         o = json.loads(raw)
                     except Exception:
                         continue
-                    if o.get("type") != "assistant" or o.get("isSidechain"):
+                    if o.get("isSidechain"):
+                        continue
+                    c0 = (o.get("message") or {}).get("content")
+                    if o.get("type") == "user" and not (isinstance(c0, list) and any(isinstance(b, dict) and b.get("type") == "tool_result" for b in c0)):
+                        break
+                    if o.get("type") != "assistant":
                         continue
                     c = (o.get("message") or {}).get("content")
                     t = c if isinstance(c, str) else chr(10).join(b.get("text", "") for b in (c or []) if isinstance(b, dict) and b.get("type") == "text")
