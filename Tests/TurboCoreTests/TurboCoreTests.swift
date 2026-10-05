@@ -963,6 +963,10 @@ final class ReplyAndChangesTests: XCTestCase {
 
     func testTestSignalAndChanges() {
         XCTAssertEqual(TestSignal.passed(command: "npm test", output: "Tests: 3 failed, 10 passed"), false)
+        XCTAssertNil(TestSignal.passed(command: "npm test", output: ""))
+        XCTAssertNil(TestSignal.passed(command: "npm test", output: "compiling..."))
+        XCTAssertEqual(TestSignal.passed(command: "npm test", output: "suite a: 0 failed\nsuite b: 2 failed"), false)
+        XCTAssertEqual(TestSignal.passed(command: "cargo test", output: "test result: ok. 5 passed; 0 failed"), true)
         XCTAssertEqual(TestSignal.passed(command: "pytest -q", output: "12 passed in 0.4s"), true)
         XCTAssertEqual(TestSignal.passed(command: "swift test", output: "", exitCode: 1), false)
         XCTAssertNil(TestSignal.passed(command: "ls -la", output: "failed"))
@@ -1024,10 +1028,21 @@ final class ReplyAndChangesTests: XCTestCase {
         XCTAssertTrue(fm.fileExists(atPath: base.path))
         try "one\ntwo\nthree\n".write(to: repo.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
         let stopOutput = try run(["hook_event_name": "Stop", "session_id": "s1", "cwd": repo.path])
-        let decision = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(stopOutput.utf8)) as? [String: String])
+        let decision = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(stopOutput.utf8)) as? [String: String], "got: \(stopOutput)")
         XCTAssertEqual(decision, ["decision": "block", "reason": "now add tests"])
         // The same reply is never delivered twice.
         XCTAssertEqual(try run(["hook_event_name": "Stop", "session_id": "s1", "cwd": repo.path]), "")
+    }
+
+    func testCancelledCloudReplyIsNotDelivered() throws {
+        let reply = CloudRelay.replyMessage(sessionID: "s", text: "x", replyID: "r1")
+        let cancel = CloudRelay.cancelMessage(sessionID: "s", replyID: "r1")
+        XCTAssertTrue(reply.contains(#""r":"r1""#))
+        XCTAssertTrue(cancel.contains(#""t":"cancel""#))
+        let hook = #"{"hook_event_name":"Stop","session_id":"s","continued":"r1"}"#
+        let event = try XCTUnwrap(EventParser.parseClaudeHook(Data(hook.utf8)))
+        XCTAssertTrue(event.continuedByReply)
+        XCTAssertEqual(event.continuedReplyID, "r1")
     }
 }
 
@@ -1040,5 +1055,19 @@ final class PlanUsageTests: XCTestCase {
         XCTAssertEqual(usage.recordedAt.timeIntervalSince1970, 1791170556.472, accuracy: 0.001)
         XCTAssertFalse(usage.isHigh)
         XCTAssertNil(PlanUsage.latest(in: Data("{}".utf8)))
+    }
+}
+
+final class WorktreeSnapshotTests: XCTestCase {
+    func testOnlyTheTurnsOwnChangesCount() {
+        // Already dirty before the turn: a.swift +3, and an untracked notes.md.
+        let start = WorktreeSnapshot(numstat: "3\t0\ta.swift\n", untracked: ["notes.md": 4])
+        // After: a.swift grew, b.swift edited, a new file, notes.md untouched.
+        let end = WorktreeSnapshot(numstat: "10\t1\ta.swift\n2\t2\tb.swift\n", untracked: ["notes.md": 4, "New.swift": 20])
+        let delta = end.since(start)
+        XCTAssertEqual(delta.files, 3)
+        XCTAssertEqual(delta.additions, 7 + 2 + 20)
+        XCTAssertEqual(delta.deletions, 1 + 2)
+        XCTAssertEqual(Set(delta.paths), ["a.swift", "b.swift", "New.swift"])
     }
 }

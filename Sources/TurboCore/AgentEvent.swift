@@ -63,6 +63,8 @@ public struct AgentEvent: Equatable, Sendable {
     public var changes: ChangeSummary?
     /// The turn didn't end: a reply sent from Turbo kept it going.
     public var continuedByReply = false
+    /// Which reply that was, when the cloud script says.
+    public var continuedReplyID: String?
     public var date: Date
 
     public init(
@@ -94,6 +96,13 @@ public struct AgentEvent: Equatable, Sendable {
         copy.testsPassed = testsPassed
         copy.changes = changes
         copy.continuedByReply = continued
+        copy.continuedReplyID = nil
+        return copy
+    }
+
+    func with(replyID: String?) -> AgentEvent {
+        var copy = self
+        copy.continuedReplyID = replyID
         return copy
     }
 
@@ -136,7 +145,7 @@ public enum EventParser {
             kind = .needsInput(message: message)
         case "Stop":
             // A reply from Turbo kept it going: the turn isn't over, it has a new instruction.
-            if obj["continued"] as? Bool == true {
+            if obj["continued"] as? Bool == true || obj["continued"] is String {
                 kind = .promptSubmitted
                 continued = true
             } else {
@@ -158,6 +167,7 @@ public enum EventParser {
             date: now
         ).with(activityDetail: activityDetail(from: obj))
             .with(testsPassed: testsPassed(from: obj), changes: (obj["changes"] as? [String: Any]).flatMap(ChangeSummary.init(json:)), continued: continued)
+            .with(replyID: obj["continued"] as? String)
     }
 
     /// From a PostToolUse hook for a shell command: whether it was a test run, and how it went.

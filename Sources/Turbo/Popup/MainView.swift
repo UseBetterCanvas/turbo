@@ -432,7 +432,8 @@ private struct SessionPane: View {
                             ThreadRow(item: item, session: session, lastInRun: isLastInRun(index))
                         }
                         // Replies waiting for the turn to end, shown as sent-but-pending.
-                        ForEach(Array((model.queuedReplies[session.id] ?? []).enumerated()), id: \.offset) { _, text in
+                        ForEach(model.queuedReplies[session.id] ?? []) { reply in
+                            let text = reply.text
                             VStack(alignment: .trailing, spacing: 3) {
                                 HStack {
                                     Spacer(minLength: 80)

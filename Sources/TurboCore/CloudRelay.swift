@@ -117,38 +117,69 @@ public enum CloudRelay {
                     code = tr.get("exit_code", tr.get("exitCode"))
                 elif isinstance(tr, str):
                     txt = tr.lower()
+                ok = None
                 if isinstance(code, int):
                     ok = code == 0
-                else:
-                    bad = any(w in txt for w in (" failed", "failures:", "error:", "tests failed", "failing", "fail ")) and not any(w in txt for w in ("0 failed", "0 failures", "failed: 0"))
-                    ok = not bad
-                out["tests"] = "pass" if ok else "fail"
+                elif txt.strip():
+                    import re
+                    fails = [int(n) for n in re.findall(r"(\d+)\s+(?:failed|failing|failures?|errors?)\b", txt) + re.findall(r"(?:failed|failures|errors):\s*(\d+)", txt)]
+                    lines = [x.strip() for x in txt.splitlines()]
+                    if any(n > 0 for n in fails) or any(x.startswith(("fail ", "fail:", "--- fail")) or "test result: failed" in x or "tests failed" in x for x in lines):
+                        ok = False
+                    elif any(int(n) > 0 for n in re.findall(r"(\d+)\s+(?:passed|passing)\b", txt)) or "test result: ok" in txt or "all tests passed" in txt or 0 in fails:
+                        ok = True
+                if ok is not None:
+                    out["tests"] = "pass" if ok else "fail"
         base_file = os.path.expanduser("~/.claude/turbo-base-" + "".join(ch for ch in sid if ch.isalnum() or ch == "-"))
         def git(*args):
             return subprocess.run(["git", "-C", full] + list(args), capture_output=True, text=True, timeout=5).stdout
+        def snapshot(base):
+            # Per-file line counts against the turn start, plus files git does not track yet.
+            files = {}
+            for row in git("diff", "--numstat", base).splitlines():
+                p = row.split(chr(9), 2)
+                if len(p) == 3:
+                    files[p[2]] = [int(p[0]) if p[0].isdigit() else 0, int(p[1]) if p[1].isdigit() else 0]
+            for path in git("ls-files", "--others", "--exclude-standard").splitlines()[:200]:
+                if path in files:
+                    continue
+                n = 0
+                try:
+                    fp = os.path.join(full, path)
+                    if os.path.getsize(fp) < 1000000:
+                        n = open(fp, "rb").read().count(b"\n")
+                except Exception:
+                    pass
+                files[path] = [n, 0]
+            return files
         if ev == "UserPromptSubmit":
+            start = {"head": "", "files": {}}
             try:
-                head = git("rev-parse", "HEAD").strip() if full else ""
+                if full:
+                    start["head"] = git("rev-parse", "HEAD").strip()
+                    start["files"] = snapshot(start["head"] or "HEAD")
             except Exception:
-                head = ""
+                pass
             try:
-                open(base_file, "w").write(head)
+                open(base_file, "w").write(json.dumps(start))
             except Exception:
                 pass
         if ev == "Stop" and full:
             try:
-                base = (open(base_file).read().strip() if os.path.exists(base_file) else "") or "HEAD"
-                files = add = dele = 0
+                start = json.load(open(base_file)) if os.path.exists(base_file) else {}
+                before = start.get("files") or {}
+                now = snapshot(start.get("head") or "HEAD")
+                add = dele = 0
                 paths = []
-                for row in git("diff", "--numstat", base).splitlines():
-                    p = row.split(chr(9), 2)
-                    if len(p) == 3:
-                        files += 1
-                        add += int(p[0]) if p[0].isdigit() else 0
-                        dele += int(p[1]) if p[1].isdigit() else 0
-                        paths.append(p[2])
-                if files:
-                    out["changes"] = {"files": files, "add": add, "del": dele}
+                for path, cnt in sorted(now.items()):
+                    if before.get(path) != cnt:
+                        was = before.get(path) or [0, 0]
+                        add += max(0, cnt[0] - was[0])
+                        dele += max(0, cnt[1] - was[1])
+                        paths.append(path)
+                paths += [path for path in before if path not in now]
+                if paths:
+                    out["changes"] = {"files": len(paths), "add": add, "del": dele}
         \#(sharePaths)    except Exception:
                 pass
         ctl = ""
@@ -162,28 +193,35 @@ public enum CloudRelay {
                     body = urllib.request.urlopen("\#(stopURL)", timeout=2).read().decode()
                     ids = seen[1:]
                     turn_start = os.path.getmtime(base_file) if os.path.exists(base_file) else 0
+                    msgs = []
                     for line in body.splitlines():
                         m = json.loads(line)
-                        if m.get("event") != "message" or m.get("id") in ids:
-                            continue
-                        msg = str(m.get("message", ""))
-                        if ev == "PreToolUse" and msg == "stop " + sid:
-                            ids.append(m["id"])
-                            ctl = "STOP"
-                        elif ev == "Stop" and not ctl and msg.startswith("{"):
-                            try:
-                                r = json.loads(msg)
-                            except Exception:
-                                continue
+                        if m.get("event") == "message" and m.get("id") not in ids:
+                            msgs.append(m)
+                    def parsed(m):
+                        try:
+                            r = json.loads(str(m.get("message", "")))
+                            return r if isinstance(r, dict) else {}
+                        except Exception:
+                            return {}
+                    stop_now = any(str(m.get("message", "")) == "stop " + sid for m in msgs)
+                    if stop_now:
+                        # Stop always wins, even over a waiting reply.
+                        ids += [m["id"] for m in msgs if str(m.get("message", "")) == "stop " + sid]
+                        ctl = "STOP"
+                    elif ev == "Stop":
+                        cancelled = set(parsed(m).get("r") for m in msgs if parsed(m).get("t") == "cancel" and parsed(m).get("s") == sid)
+                        for m in msgs:
+                            r = parsed(m)
                             # Only replies sent during this turn: an old one never surprises a later turn.
-                            if r.get("t") == "reply" and r.get("s") == sid and r.get("m") and m.get("time", 0) >= turn_start - 2:
+                            if r.get("t") == "reply" and r.get("s") == sid and r.get("m") and r.get("r") not in cancelled and m.get("time", 0) >= turn_start - 2:
                                 ids.append(m["id"])
                                 ctl = "REPLY" + json.dumps({"decision": "block", "reason": str(r["m"])[:4000]})
+                                out["continued"] = str(r.get("r") or True)
+                                break
                     open(state, "w").write(" ".join([str(time.time())] + ids[-50:]))
             except Exception:
                 pass
-        if ctl.startswith("REPLY"):
-            out["continued"] = True
         print(json.dumps(out))
         if ctl:
             print(ctl)
@@ -201,8 +239,14 @@ public enum CloudRelay {
     }
 
     /// What Turbo posts to hand a cloud session your reply when its turn ends.
-    public static func replyMessage(sessionID: String, text: String) -> String {
-        let data = (try? JSONSerialization.data(withJSONObject: ["t": "reply", "s": sessionID, "m": text], options: [.sortedKeys])) ?? Data()
+    public static func replyMessage(sessionID: String, text: String, replyID: String = UUID().uuidString) -> String {
+        let data = (try? JSONSerialization.data(withJSONObject: ["t": "reply", "s": sessionID, "m": text, "r": replyID], options: [.sortedKeys])) ?? Data()
+        return String(decoding: data, as: UTF8.self)
+    }
+
+    /// Takes back a reply that hasn't been picked up yet.
+    public static func cancelMessage(sessionID: String, replyID: String) -> String {
+        let data = (try? JSONSerialization.data(withJSONObject: ["t": "cancel", "s": sessionID, "r": replyID], options: [.sortedKeys])) ?? Data()
         return String(decoding: data, as: UTF8.self)
     }
 

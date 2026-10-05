@@ -186,15 +186,38 @@ public enum TestSignal {
         "mvn test", "dotnet test", "make test", "deno test", "playwright test",
     ]
 
-    /// nil when the command isn't a test run.
+    /// nil when the command isn't a test run, or when there's no evidence either way.
     public static func passed(command: String, output: String, exitCode: Int? = nil) -> Bool? {
         let c = command.lowercased()
         guard runners.contains(where: { c.contains($0) }) else { return nil }
         if let exitCode { return exitCode == 0 }
+        return verdict(output)
+    }
+
+    /// Reads a test runner's summary. Failures count on their own, so "0 failed" in one place
+    /// can't hide "2 failed" in another; with no summary at all, it's unknown.
+    static func verdict(_ output: String) -> Bool? {
         let o = output.lowercased()
-        let failed = [" failed", "failures:", "✗", "✕", "error:", "tests failed", "failing", "fail "].contains { o.contains($0) }
-            && !o.contains("0 failed") && !o.contains("0 failures") && !o.contains("failed: 0")
-        return !failed
+        guard !o.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        func counts(_ pattern: String) -> [Int] {
+            guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
+            let range = NSRange(o.startIndex..., in: o)
+            return regex.matches(in: o, range: range).compactMap { match in
+                Range(match.range(at: 1), in: o).flatMap { Int(o[$0]) }
+            }
+        }
+        let failures = counts(#"(\d+)\s+(?:failed|failing|failures?|errors?)\b"#) + counts(#"(?:failed|failures|errors):\s*(\d+)"#)
+        if failures.contains(where: { $0 > 0 }) { return false }
+        let failLine = o.split(whereSeparator: \.isNewline).contains { line in
+            let t = line.trimmingCharacters(in: .whitespaces)
+            return t.hasPrefix("fail ") || t.hasPrefix("fail:") || t.hasPrefix("✗") || t.hasPrefix("✕") || t.hasPrefix("--- fail") || t.contains("test result: failed") || t.contains("tests failed")
+        }
+        if failLine { return false }
+        let passes = counts(#"(\d+)\s+(?:passed|passing|tests? passed)\b"#)
+        if passes.contains(where: { $0 > 0 }) || o.contains("test result: ok") || o.contains("all tests passed") || failures.contains(0) {
+            return true
+        }
+        return nil
     }
 }
 
@@ -230,6 +253,44 @@ public struct ChangeSummary: Equatable, Sendable {
     init?(json: [String: Any]) {
         guard let files = json["files"] as? Int else { return nil }
         self.init(files: files, additions: json["add"] as? Int ?? 0, deletions: json["del"] as? Int ?? 0, paths: json["paths"] as? [String] ?? [])
+    }
+}
+
+/// The repo's uncommitted state at one moment: per-file line counts against a commit, plus files
+/// git doesn't track yet. Comparing the snapshot at the start of a turn with the one at the end
+/// gives what the turn itself did, even in a worktree that was already dirty.
+public struct WorktreeSnapshot: Equatable, Sendable {
+    public var files: [String: [Int]]
+
+    public init(files: [String: [Int]] = [:]) {
+        self.files = files
+    }
+
+    /// `numstat` against the turn's starting commit, plus untracked files with their line counts.
+    public init(numstat: String, untracked: [String: Int]) {
+        var files: [String: [Int]] = [:]
+        for line in numstat.split(whereSeparator: \.isNewline) {
+            let parts = line.split(separator: "\t", maxSplits: 2)
+            guard parts.count == 3 else { continue }
+            files[String(parts[2])] = [Int(parts[0]) ?? 0, Int(parts[1]) ?? 0]
+        }
+        for (path, lines) in untracked where files[path] == nil { files[path] = [lines, 0] }
+        self.init(files: files)
+    }
+
+    /// What changed between `start` and `self`: files whose counts moved, and by how much.
+    public func since(_ start: WorktreeSnapshot) -> ChangeSummary {
+        var add = 0, del = 0
+        var paths: [String] = []
+        for (path, now) in files.sorted(by: { $0.key < $1.key }) where start.files[path] != now {
+            let before = start.files[path] ?? [0, 0]
+            add += max(0, now[0] - before[0])
+            del += max(0, now[1] - before[1])
+            paths.append(path)
+        }
+        // Edits that were undone, or files removed again, still count as touched.
+        for path in start.files.keys where files[path] == nil { paths.append(path) }
+        return ChangeSummary(files: paths.count, additions: add, deletions: del, paths: paths)
     }
 }
 
