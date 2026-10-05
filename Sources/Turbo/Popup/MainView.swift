@@ -546,13 +546,11 @@ private struct SessionPane: View {
     /// When the agent first did something after this prompt: that's when it "read" it.
     private func readAt(_ index: Int, in items: [ThreadItem]) -> Date? {
         guard items[index].kind == .prompt else { return nil }
+        // Only what's logged after this message counts (a step, a reply, a question for you), so
+        // a message queued mid-turn isn't marked read by work on the one before it.
         for later in items[(index + 1)...] {
             if later.kind == .prompt { return nil }
-            if later.kind != .needs { return later.date }
-        }
-        // Nothing logged yet, but it's working on it.
-        if session.phase.isActive, case .cooking = session.phase, session.lastActivityAt > items[index].date {
-            return session.lastActivityAt
+            return later.date
         }
         return nil
     }
@@ -606,19 +604,26 @@ private struct ThreadRow: View {
     /// "Read" goes under your latest message only, like iMessage.
     var showsRead = false
 
+    /// A tapback once the agent's on it, before it starts typing back.
+    @ViewBuilder private var tapback: some View {
+        if readAt != nil { Tapback().offset(x: -10, y: -10).transition(.scale.combined(with: .opacity)) }
+    }
+
     var body: some View {
         switch item.kind {
         case .prompt:
             HStack {
                 Spacer(minLength: 80)
                 VStack(alignment: .trailing, spacing: 4) {
-                    if !item.images.isEmpty { PromptImages(urls: item.images) }
-                    if let text = item.text, !text.isEmpty {
+                    let hasText = !(item.text ?? "").isEmpty
+                    if !item.images.isEmpty {
+                        PromptImages(urls: item.images)
+                            .overlay(alignment: .topLeading) { if !hasText { tapback } }
+                            .padding(.top, !hasText && readAt != nil ? 6 : 0)
+                    }
+                    if let text = item.text, hasText {
                         Bubble(text: text, fill: DS.Palette.brand, foreground: .white, mine: true, tail: lastInRun)
-                            // A tapback once the agent's on it, before it starts typing back.
-                            .overlay(alignment: .topLeading) {
-                                if readAt != nil { Tapback().offset(x: -10, y: -10).transition(.scale.combined(with: .opacity)) }
-                            }
+                            .overlay(alignment: .topLeading) { tapback }
                             .padding(.top, readAt != nil ? 6 : 0)
                     }
                     if showsRead, let readAt {

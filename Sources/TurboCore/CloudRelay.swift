@@ -50,6 +50,7 @@ public enum CloudRelay {
         if d.get("hook_event_name") == "UserPromptSubmit":
             out["prompt"] = str(d.get("prompt", "")).strip()[:500]
         pending_imgs = []
+        queued_imgs = []
         if d.get("hook_event_name") == "Stop":
             try:
                 with open(str(d.get("transcript_path") or ""), "rb") as fh:
@@ -69,9 +70,9 @@ public enum CloudRelay {
                         # A message you sent mid-turn: its images count for this turn too.
                         for b in att["prompt"]:
                             src = b.get("source") if isinstance(b, dict) and b.get("type") == "image" else None
-                            if isinstance(src, dict) and src.get("type") == "base64" and len(pending_imgs) < 3:
+                            if isinstance(src, dict) and src.get("type") == "base64" and len(queued_imgs) < 3:
                                 ext = {"image/jpeg": "jpg", "image/gif": "gif", "image/webp": "webp"}.get(src.get("media_type"), "png")
-                                pending_imgs.append((str(src.get("data") or ""), ext))
+                                queued_imgs.append((str(src.get("data") or ""), ext))
                         continue
                     c0 = (o.get("message") or {}).get("content")
                     if o.get("type") == "user" and not (isinstance(c0, list) and any(isinstance(b, dict) and b.get("type") == "tool_result" for b in c0)):
@@ -88,6 +89,8 @@ public enum CloudRelay {
                     t = c if isinstance(c, str) else chr(10).join(b.get("text", "") for b in (c or []) if isinstance(b, dict) and b.get("type") == "text")
                     if t.strip():
                         out["reply"] = t.strip()[:1500]
+                # The prompt that started the turn keeps its images first; mid-turn ones fill the rest.
+                pending_imgs = (pending_imgs + queued_imgs)[:3]
             except Exception:
                 pass
 
