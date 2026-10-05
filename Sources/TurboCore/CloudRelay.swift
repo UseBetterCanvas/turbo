@@ -244,6 +244,25 @@ public enum CloudRelay {
         return String(decoding: data, as: UTF8.self)
     }
 
+    /// Where reply attachments are uploaded for cloud sessions (ntfy keeps them for a few hours).
+    public static func filesURL(channel: String, server: URL = defaultServer) -> URL {
+        server.appendingPathComponent(channel + "-files")
+    }
+
+    /// The text added to a reply so Claude can fetch its attachments.
+    public static func attachmentNote(local: [String], links: [(name: String, url: String)]) -> String {
+        var lines: [String] = []
+        if !local.isEmpty {
+            lines.append("Attached files (on this Mac):")
+            lines += local
+        }
+        if !links.isEmpty {
+            lines.append("Attached files. Download each with curl -L -o <name> <url>:")
+            lines += links.map { "\($0.name): \($0.url)" }
+        }
+        return lines.joined(separator: "\n")
+    }
+
     /// Takes back a reply that hasn't been picked up yet.
     public static func cancelMessage(sessionID: String, replyID: String) -> String {
         let data = (try? JSONSerialization.data(withJSONObject: ["t": "cancel", "s": sessionID, "r": replyID], options: [.sortedKeys])) ?? Data()

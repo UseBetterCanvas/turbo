@@ -411,14 +411,25 @@ private struct SessionPane: View {
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(spacing: 6) {
-                        if items.isEmpty || (session.agent.isCloud && !prefs.cloudShareTitles) {
-                            Text(session.agent.isCloud && !prefs.cloudShareTitles
-                                 ? "Turn on Show Cloud Conversations in Settings to see prompts and replies here. For now, you'll see each step."
-                                 : "The conversation shows up here as it happens.")
+                        if session.agent == .cloud && !prefs.cloudShareTitles {
+                            // One click to see the whole conversation, both ways.
+                            VStack(spacing: 8) {
+                                Text("See what you and Claude say here too: your prompts and Claude's replies.")
+                                    .font(DSFont.sans(12, .medium))
+                                    .foregroundStyle(DS.Palette.textSecondary)
+                                    .multilineTextAlignment(.center)
+                                Button("Turn On and Copy Setup Script") { model.turnOnCloudConversations() }
+                                    .buttonStyle(SecondaryButtonStyle())
+                                Text("Then paste it into your claude.ai/code environment. New sessions show the full chat.")
+                                    .font(DSFont.sans(11, .medium))
+                                    .foregroundStyle(DS.Palette.textTertiary)
+                            }
+                            .padding(.horizontal, 40)
+                            .padding(.vertical, 10)
+                        } else if items.isEmpty {
+                            Text("The conversation shows up here as it happens.")
                                 .font(DSFont.sans(12, .medium))
                                 .foregroundStyle(DS.Palette.textTertiary)
-                                .multilineTextAlignment(.center)
-                                .padding(.horizontal, 40)
                                 .padding(.vertical, 10)
                         }
                         ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
@@ -691,6 +702,8 @@ private struct ComposerBar: View {
     @EnvironmentObject private var model: AppModel
     let session: AgentSession
     @State private var draft = ""
+    @State private var attachments: [URL] = []
+    @State private var dropTargeted = false
     @FocusState private var focused: Bool
 
     var body: some View {
@@ -724,9 +737,46 @@ private struct ComposerBar: View {
                     .padding(.horizontal, DS.Space.xl)
                     .padding(.top, 8)
             }
+            if !attachments.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 6) {
+                        ForEach(attachments, id: \.self) { file in
+                            HStack(spacing: 5) {
+                                Image(systemName: Self.symbol(for: file)).font(.system(size: 10, weight: .semibold))
+                                Text(file.lastPathComponent).lineLimit(1).truncationMode(.middle).frame(maxWidth: 160)
+                                Button { attachments.removeAll { $0 == file } } label: {
+                                    Image(systemName: "xmark.circle.fill").font(.system(size: 11))
+                                }
+                                .buttonStyle(.plain)
+                                .foregroundStyle(DS.Palette.textTertiary)
+                            }
+                            .font(DSFont.sans(11.5, .medium))
+                            .foregroundStyle(DS.Palette.textPrimary)
+                            .padding(.horizontal, 9)
+                            .frame(height: 26)
+                            .background(Capsule().fill(Color.white.opacity(0.08)))
+                        }
+                    }
+                }
+                .padding(.horizontal, DS.Space.xl)
+                .padding(.top, 10)
+            }
             HStack(spacing: 8) {
                 StopButton(session: session)
                 HStack(spacing: 6) {
+                    Menu {
+                        Button("Choose Files…") { chooseFiles() }
+                        Button("Paste Image") { if let image = model.pastedImageFile() { attachments.append(image) } }
+                            .disabled(NSImage(pasteboard: NSPasteboard.general) == nil)
+                    } label: {
+                        Image(systemName: "paperclip")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(DS.Palette.textSecondary)
+                    }
+                    .menuStyle(.borderlessButton)
+                    .menuIndicator(.hidden)
+                    .fixedSize()
+                    .help("Attach files or a pasted image. You can also drop files here.")
                     TextField(placeholder(route), text: $draft, axis: .vertical)
                         .textFieldStyle(.plain)
                         .font(DSFont.sans(13.5, .medium))
@@ -737,17 +787,26 @@ private struct ComposerBar: View {
                     Button(action: send) {
                         Image(systemName: "arrow.up.circle.fill")
                             .font(.system(size: 22))
-                            .foregroundStyle(draft.trimmingCharacters(in: .whitespaces).isEmpty ? DS.Palette.textTertiary : DS.Palette.brand)
+                            .foregroundStyle(canSend ? DS.Palette.brand : DS.Palette.textTertiary)
                     }
                     .buttonStyle(.plain)
-                    .disabled(draft.trimmingCharacters(in: .whitespaces).isEmpty)
+                    .disabled(!canSend)
                     .keyboardShortcut(.return, modifiers: [.command])
                     .help(help(route))
                 }
                 .padding(.leading, 14)
                 .padding(.trailing, 5)
                 .padding(.vertical, 5)
-                .background(RoundedRectangle(cornerRadius: 18, style: .continuous).strokeBorder(Color.white.opacity(focused ? 0.28 : 0.14), lineWidth: 1))
+                .background(RoundedRectangle(cornerRadius: 18, style: .continuous).strokeBorder(dropTargeted ? DS.Palette.brand : Color.white.opacity(focused ? 0.28 : 0.14), lineWidth: dropTargeted ? 2 : 1))
+                .onDrop(of: [.fileURL], isTargeted: $dropTargeted) { providers in
+                    for provider in providers {
+                        _ = provider.loadObject(ofClass: URL.self) { url, _ in
+                            guard let url else { return }
+                            DispatchQueue.main.async { if !attachments.contains(url) { attachments.append(url) } }
+                        }
+                    }
+                    return true
+                }
                 if !session.phase.isActive {
                     Button("Dismiss") { withAnimation(DS.Motion.base) { model.dismiss(session) } }
                         .buttonStyle(GhostButtonStyle())
@@ -759,10 +818,43 @@ private struct ComposerBar: View {
         .padding(.bottom, 6)
     }
 
+    private var canSend: Bool {
+        guard !model.uploadingSessions.contains(session.id) else { return false }
+        let hasText = !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        // While approval is pending a reply is a denial note, so it needs words.
+        if model.replyRoute(for: session) == .denyWithNote { return hasText }
+        return hasText || !attachments.isEmpty
+    }
+
     private func send() {
-        let text = draft
+        guard canSend else { return }
+        let text = draft, files = attachments
         draft = ""
-        model.send(text, to: session)
+        attachments = []
+        model.send(text, attachments: files, to: session) { text, files in
+            // Upload failed: put everything back so it can be retried.
+            if draft.isEmpty { draft = text }
+            attachments = files + attachments.filter { !files.contains($0) }
+        }
+    }
+
+    private func chooseFiles() {
+        let panel = NSOpenPanel()
+        panel.allowsMultipleSelection = true
+        panel.canChooseDirectories = false
+        panel.level = .modalPanel
+        NSApp.activate(ignoringOtherApps: true)
+        if panel.runModal() == .OK {
+            attachments += panel.urls.filter { !attachments.contains($0) }
+        }
+    }
+
+    static func symbol(for file: URL) -> String {
+        switch file.pathExtension.lowercased() {
+        case "png", "jpg", "jpeg", "gif", "heic", "webp": return "photo"
+        case "pdf": return "doc.richtext"
+        default: return "doc"
+        }
     }
 
     private func placeholder(_ route: AppModel.ReplyRoute) -> String {

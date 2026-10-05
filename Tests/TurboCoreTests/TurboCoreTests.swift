@@ -1111,4 +1111,14 @@ final class PlanUsageEdgeTests: XCTestCase {
         XCTAssertNotNil(try XCTUnwrap(PlanUsage.latest(in: Data(reset.utf8), now: start.addingTimeInterval(3600))).sessionResetsAt)
         XCTAssertNil(try XCTUnwrap(PlanUsage.latest(in: Data(reset.utf8), now: start.addingTimeInterval(6 * 3600))).sessionResetsAt)
     }
+
+    func testAttachmentNoteAndFilesChannel() {
+        XCTAssertEqual(CloudRelay.filesURL(channel: "turbo-abc").lastPathComponent, "turbo-abc-files")
+        let local = CloudRelay.attachmentNote(local: ["/tmp/a.png"], links: [])
+        XCTAssertTrue(local.contains("/tmp/a.png"))
+        let cloud = CloudRelay.attachmentNote(local: [], links: [(name: "a.png", url: "https://ntfy.sh/file/x.png")])
+        XCTAssertTrue(cloud.contains("curl -L"))
+        XCTAssertTrue(cloud.contains("a.png: https://ntfy.sh/file/x.png"))
+        XCTAssertEqual(CloudRelay.attachmentNote(local: [], links: []), "")
+    }
 }
