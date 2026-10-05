@@ -41,15 +41,45 @@ public enum CloudRelay {
     /// `shareTitles` also sends the first few words of each prompt, so cloud sessions get a
     /// name instead of just the repo. Off unless you turn it on.
     public static func relayScript(channel: String, server: URL = defaultServer, shareTitles: Bool = false) -> String {
-        let titleLines = shareTitles
-            ? "if d.get(\"hook_event_name\") == \"UserPromptSubmit\":\n    out[\"prompt\"] = \" \".join(str(d.get(\"prompt\", \"\")).split()[:6])\n"
-            : ""
+        // Opt-in: the prompt (first 500 characters) and Claude's final reply (first 1,500), read
+        // from the session's own transcript when the turn stops. No single quotes: this python
+        // runs inside a single-quoted shell string.
+        let titleLines = shareTitles ? #"""
+        if d.get("hook_event_name") == "UserPromptSubmit":
+            out["prompt"] = str(d.get("prompt", "")).strip()[:500]
+        if d.get("hook_event_name") == "Stop":
+            try:
+                with open(str(d.get("transcript_path") or ""), "rb") as fh:
+                    fh.seek(0, 2)
+                    fh.seek(max(0, fh.tell() - 200000))
+                    lines = fh.read().decode("utf-8", "ignore").splitlines()
+                for raw in reversed(lines):
+                    try:
+                        o = json.loads(raw)
+                    except Exception:
+                        continue
+                    if o.get("isSidechain"):
+                        continue
+                    c0 = (o.get("message") or {}).get("content")
+                    if o.get("type") == "user" and not (isinstance(c0, list) and any(isinstance(b, dict) and b.get("type") == "tool_result" for b in c0)):
+                        break
+                    if o.get("type") != "assistant":
+                        continue
+                    c = (o.get("message") or {}).get("content")
+                    t = c if isinstance(c, str) else chr(10).join(b.get("text", "") for b in (c or []) if isinstance(b, dict) and b.get("type") == "text")
+                    if t.strip():
+                        out["reply"] = t.strip()[:1500]
+                        break
+            except Exception:
+                pass
+
+        """# : ""
         let stopURL = server.appendingPathComponent(stopChannel(channel)).appendingPathComponent("json").absoluteString + "?poll=1&since=10m"
         return """
         #!/bin/bash
         # \(marker): tells the Turbo app on your Mac what this cloud session is doing.
         # Sends the event name, repo folder name, session link and Claude's one-line description
-        # of the current step.\(shareTitles ? " Also the first 6 words of each prompt, as a title." : "") Never code or output.
+        # of the current step.\(shareTitles ? " Also your prompts and the final replies from Claude (you turned that on)." : "") Never code.
         input=$(cat)
         result=$(printf '%s' "$input" | python3 -c '
         import json, os, sys, time

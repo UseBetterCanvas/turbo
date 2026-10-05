@@ -120,7 +120,7 @@ public enum EventParser {
             }
             kind = .needsInput(message: message)
         case "Stop":
-            kind = .turnComplete(summary: obj["last_assistant_message"] as? String)
+            kind = .turnComplete(summary: (obj["last_assistant_message"] as? String) ?? (obj["reply"] as? String))
         case "SessionEnd":
             kind = .sessionEnded
         default:
