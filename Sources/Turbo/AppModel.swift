@@ -155,6 +155,8 @@ final class AppModel: ObservableObject {
     @Published private(set) var queuedReplies: [String: [QueuedReply]] = [:]
     /// A one-line note for the composer ("Copied. Paste it in the terminal.").
     @Published private(set) var composerNotes: [String: String] = [:]
+    /// Sessions with an attachment upload in flight. One at a time, so replies arrive in order.
+    @Published private(set) var uploadingSessions: Set<String> = []
     /// Your Claude plan usage, as the Claude app last recorded it.
     @Published private(set) var usage: PlanUsage?
     /// The usage panel is open; the island stays expanded under it.
@@ -870,14 +872,19 @@ final class AppModel: ObservableObject {
 
     /// Sends a reply with attachments. Local sessions get the files' paths (Claude can open them);
     /// cloud sessions get links, uploaded to your private channel first.
-    func send(_ raw: String, attachments: [URL], to session: AgentSession) {
+    /// `onFailure` gets the draft and files back when an upload fails, so nothing is lost.
+    func send(_ raw: String, attachments: [URL], to session: AgentSession, onFailure: @escaping (String, [URL]) -> Void = { _, _ in }) {
         guard !attachments.isEmpty else { send(raw, to: session); return }
+        // A note while approval is pending denies the request, so a reply needs words, not just files.
+        if replyRoute(for: session) == .denyWithNote && raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { onFailure(raw, attachments); return }
+        guard !uploadingSessions.contains(session.id) else { onFailure(raw, attachments); return }
         let cloud = session.agent.isCloud || (session.agent == .cowork && session.logPath == nil)
         if !cloud {
             let note = CloudRelay.attachmentNote(local: attachments.map(\.path), links: [])
             send(raw.isEmpty ? note : raw + "\n\n" + note, to: session)
             return
         }
+        uploadingSessions.insert(session.id)
         composerNotes[session.id] = "Uploading \(attachments.count) file\(attachments.count == 1 ? "" : "s")…"
         let target = CloudRelay.filesURL(channel: preferences.cloudChannel)
         Task {
@@ -896,12 +903,10 @@ final class AppModel: ObservableObject {
                 }
             }
             await MainActor.run {
+                self.uploadingSessions.remove(session.id)
                 guard links.count == attachments.count else {
-                    if !raw.isEmpty {
-                        NSPasteboard.general.clearContents()
-                        NSPasteboard.general.setString(raw, forType: .string)
-                    }
-                    self.composerNotes[session.id] = "Couldn't upload \(attachments.count - links.count) of your files (15 MB max each). Nothing was sent" + (raw.isEmpty ? "." : ", your message is copied.")
+                    self.composerNotes[session.id] = "Couldn't upload \(attachments.count - links.count) of your files (15 MB max each). Nothing was sent, try again."
+                    onFailure(raw, attachments)
                     return
                 }
                 let note = CloudRelay.attachmentNote(local: [], links: links)
@@ -917,7 +922,7 @@ final class AppModel: ObservableObject {
               let png = rep.representation(using: .png, properties: [:]) else { return nil }
         let dir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("Turbo/Attachments", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        let url = dir.appendingPathComponent("Pasted image \(Date().formatted(.dateTime.hour().minute().second())).png".replacingOccurrences(of: ":", with: "."))
+        let url = dir.appendingPathComponent("Pasted image \(UUID().uuidString.prefix(8)).png")
         return (try? png.write(to: url)) != nil ? url : nil
     }
 

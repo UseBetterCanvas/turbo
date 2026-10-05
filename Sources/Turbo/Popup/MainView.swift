@@ -411,7 +411,7 @@ private struct SessionPane: View {
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(spacing: 6) {
-                        if session.agent.isCloud && !prefs.cloudShareTitles {
+                        if session.agent == .cloud && !prefs.cloudShareTitles {
                             // One click to see the whole conversation, both ways.
                             VStack(spacing: 8) {
                                 Text("See what you and Claude say here too: your prompts and Claude's replies.")
@@ -819,7 +819,11 @@ private struct ComposerBar: View {
     }
 
     private var canSend: Bool {
-        !draft.trimmingCharacters(in: .whitespaces).isEmpty || !attachments.isEmpty
+        guard !model.uploadingSessions.contains(session.id) else { return false }
+        let hasText = !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        // While approval is pending a reply is a denial note, so it needs words.
+        if model.replyRoute(for: session) == .denyWithNote { return hasText }
+        return hasText || !attachments.isEmpty
     }
 
     private func send() {
@@ -827,7 +831,11 @@ private struct ComposerBar: View {
         let text = draft, files = attachments
         draft = ""
         attachments = []
-        model.send(text, attachments: files, to: session)
+        model.send(text, attachments: files, to: session) { text, files in
+            // Upload failed: put everything back so it can be retried.
+            if draft.isEmpty { draft = text }
+            attachments = files + attachments.filter { !files.contains($0) }
+        }
     }
 
     private func chooseFiles() {
