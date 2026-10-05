@@ -705,7 +705,9 @@ final class AppModel: ObservableObject {
         case .claude: return claudeStopReady ? .nextStep : nil
         case .codex: return session.logPath == nil ? nil : .interrupt
         case .cloud: return preferences.cloudEnabled ? .cloud : nil
-        case .cowork, .codexCloud: return nil
+        // A Cowork task on this Mac has a log; one reported by the plugin runs in the cloud.
+        case .cowork: return session.logPath == nil && preferences.cloudEnabled ? .cloud : nil
+        case .codexCloud: return nil
         }
     }
 
@@ -929,6 +931,31 @@ final class AppModel: ObservableObject {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(cloudSetupScript, forType: .string)
         preferences.copiedCloudScript = cloudSetupScript
+    }
+
+    /// Writes Turbo-for-Cowork.zip to Downloads and returns it. Turns on cloud listening, since
+    /// the plugin reports through the same private channel.
+    func saveCoworkPlugin() throws -> URL {
+        if !preferences.cloudEnabled { preferences.cloudEnabled = true }
+        let fm = FileManager.default
+        let work = fm.temporaryDirectory.appendingPathComponent("turbo-plugin-\(UUID().uuidString)/turbo", isDirectory: true)
+        defer { try? fm.removeItem(at: work.deletingLastPathComponent()) }
+        for (path, contents) in CloudRelay.coworkPlugin(channel: preferences.cloudChannel, shareTitles: preferences.cloudShareTitles) {
+            let url = work.appendingPathComponent(path)
+            try fm.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try contents.write(to: url, atomically: true, encoding: .utf8)
+            if path.hasSuffix(".sh") { try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path) }
+        }
+        let downloads = fm.urls(for: .downloadsDirectory, in: .userDomainMask).first ?? fm.homeDirectoryForCurrentUser
+        let zip = downloads.appendingPathComponent("Turbo-for-Cowork.zip")
+        try? fm.removeItem(at: zip)
+        let ditto = Process()
+        ditto.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
+        ditto.arguments = ["-c", "-k", "--keepParent", work.path, zip.path]
+        try ditto.run()
+        ditto.waitUntilExit()
+        guard ditto.terminationStatus == 0 else { throw CocoaError(.fileWriteUnknown) }
+        return zip
     }
 
     var cloudSetupScript: String {

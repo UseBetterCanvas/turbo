@@ -905,3 +905,41 @@ final class TranscriptThreadEdgeTests: XCTestCase {
         XCTAssertEqual(items.map(\.text), ["hi", "One", nil, "Plain string reply"])
     }
 }
+
+final class CoworkPluginTests: XCTestCase {
+    func testPluginFilesAreValid() throws {
+        let files = CloudRelay.coworkPlugin(channel: "turbo-x")
+        let manifest = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(try XCTUnwrap(files[".claude-plugin/plugin.json"]).utf8)) as? [String: Any])
+        XCTAssertEqual(manifest["name"] as? String, "turbo")
+        let hooks = try XCTUnwrap((JSONSerialization.jsonObject(with: Data(try XCTUnwrap(files["hooks/hooks.json"]).utf8)) as? [String: Any])?["hooks"] as? [String: Any])
+        XCTAssertEqual(Set(hooks.keys), Set(CloudRelay.events))
+        let pre = try XCTUnwrap((hooks["PreToolUse"] as? [[String: Any]])?.first)
+        XCTAssertEqual(pre["matcher"] as? String, "*")
+        XCTAssertEqual(((pre["hooks"] as? [[String: Any]])?.first?["command"]) as? String, "${CLAUDE_PLUGIN_ROOT}/hooks/turbo-relay.sh")
+        XCTAssertTrue(try XCTUnwrap(files["hooks/turbo-relay.sh"]).contains(#"out["source"] = "cowork""#))
+    }
+
+    func testCoworkPingsShowAsCowork() throws {
+        // The plugin's script, run for real, tags its pings; the Mac files them under Cowork.
+        guard FileManager.default.isExecutableFile(atPath: "/usr/bin/python3") else { throw XCTSkip("no python3") }
+        let script = try XCTUnwrap(CloudRelay.coworkPlugin(channel: "turbo-x")["hooks/turbo-relay.sh"])
+        let start = try XCTUnwrap(script.range(of: "python3 -c '")).upperBound
+        let end = try XCTUnwrap(script.range(of: "' 2>/dev/null) || exit 0")).lowerBound
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
+        process.arguments = ["-c", String(script[start..<end])]
+        let input = Pipe(), output = Pipe()
+        process.standardInput = input
+        process.standardOutput = output
+        try process.run()
+        input.fileHandleForWriting.write(Data(#"{"hook_event_name":"UserPromptSubmit","session_id":"cw1","cwd":"/sessions/brave-owl"}"#.utf8))
+        try input.fileHandleForWriting.close()
+        process.waitUntilExit()
+        let line = String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self).split(separator: "\n").first ?? ""
+        let envelope = try JSONSerialization.data(withJSONObject: ["event": "message", "id": "1", "message": String(line)])
+        let event = try XCTUnwrap(EventParser.parseRelayLine(envelope)?.event)
+        XCTAssertEqual(event.agent, .cowork)
+        XCTAssertEqual(event.sessionID, "cw1")
+        XCTAssertEqual(event.hostAppBundleID, "com.anthropic.claudefordesktop")
+    }
+}

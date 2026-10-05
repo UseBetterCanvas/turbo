@@ -55,7 +55,7 @@ private struct ConnectionsSection: View {
             ConnectionRow(agent: .cowork, status: watch(.cowork, prefs.watchCoworkSessions), startsExpanded: false) {
                 Toggle("Cowork", isOn: $prefs.watchCoworkSessions).toggleStyle(BCSwitchStyle()).labelsHidden()
             } details: {
-                EmptyView()
+                CoworkPluginDetails()
             }
         }
         if let error { Callout(symbol: "", text: error, tone: .bad) }
@@ -700,5 +700,46 @@ struct AgentSetupCard<Accessory: View, Footer: View>: View {
 extension AgentSetupCard where Footer == EmptyView {
     init(agent: Agent, status: (String, StatusTone), @ViewBuilder accessory: @escaping () -> Accessory) {
         self.init(agent: agent, status: status, accessory: accessory) { EmptyView() }
+    }
+}
+
+/// Cowork tasks on your Mac are read from disk. Tasks that run in the cloud need Turbo's plugin,
+/// which reports them through your private channel like the cloud setup script does.
+private struct CoworkPluginDetails: View {
+    @EnvironmentObject private var model: AppModel
+    @State private var savedTo: URL?
+    @State private var error: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: DS.Space.s) {
+            Text("Tasks that run on this Mac show up on their own. For Cowork tasks that run in the cloud, add Turbo's plugin to Cowork once.")
+                .font(DS.Typography.caption)
+                .foregroundStyle(DS.Palette.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack(spacing: DS.Space.s) {
+                Button {
+                    do {
+                        savedTo = try model.saveCoworkPlugin()
+                        error = nil
+                    } catch {
+                        self.error = "Couldn't save the plugin: \(error.localizedDescription)"
+                    }
+                } label: {
+                    Label(savedTo == nil ? "Get Cowork Plugin" : "Saved to Downloads", systemImage: savedTo == nil ? "puzzlepiece.extension" : "checkmark")
+                }
+                .buttonStyle(PrimaryButtonStyle())
+                if savedTo != nil {
+                    Button("Show in Finder") { if let savedTo { NSWorkspace.shared.activateFileViewerSelecting([savedTo]) } }
+                        .buttonStyle(SecondaryButtonStyle())
+                }
+            }
+            if savedTo != nil {
+                Text("In Claude, open Cowork's plugins, choose Upload, and pick Turbo-for-Cowork.zip. New cloud tasks then show up here, with Stop.")
+                    .font(DS.Typography.caption)
+                    .foregroundStyle(DS.Palette.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if let error { Text(error).font(DS.Typography.caption).foregroundStyle(DS.Palette.bad) }
+        }
     }
 }

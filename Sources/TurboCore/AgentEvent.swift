@@ -363,8 +363,10 @@ public enum EventParser {
         guard let message = envelope["message"] as? String,
               let payload = message.data(using: .utf8),
               var event = parseClaudeHook(payload, now: now) else { return (id, nil) }
-        event.agent = .cloud
-        let remote = (jsonObject(payload)?["remote_session_id"] as? String) ?? ""
+        let fields = jsonObject(payload) ?? [:]
+        event.agent = fields["source"] as? String == "cowork" ? .cowork : .cloud
+        if event.agent == .cowork { event.hostAppBundleID = "com.anthropic.claudefordesktop" }
+        let remote = (fields["remote_session_id"] as? String) ?? ""
         if remote.hasPrefix("cse_") {
             event.link = URL(string: "https://claude.ai/code/session_" + remote.dropFirst(4))
         }
