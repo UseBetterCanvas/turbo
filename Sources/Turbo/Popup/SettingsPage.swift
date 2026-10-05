@@ -450,21 +450,14 @@ private struct IslandSection: View {
                 .frame(width: 150)
             }
             RowDivider()
-            SettingRow(title: "Announce sessions longer than", detail: "Quicker ones finish quietly.") {
+            SettingRow(title: "Skip Alerts for Quick Turns", detail: "Turns shorter than this finish quietly.") {
                 Stepper("\(Int(prefs.minimumCookSeconds)) sec", value: $prefs.minimumCookSeconds, in: 0...300, step: 5)
                     .font(DS.Typography.bodyStrong.monospacedDigit())
             }
             RowDivider()
-            SettingRow(title: "Keep the done card up for", detail: "Hovering keeps it open.") {
-                Stepper("\(Int(prefs.celebrateSeconds)) sec", value: $prefs.celebrateSeconds, in: 2...60, step: 1)
-                    .font(DS.Typography.bodyStrong.monospacedDigit())
-            }
-            RowDivider()
-            ToggleRow(title: "Click a Card to Open Its Session", isOn: $prefs.returnToTerminalOnClick)
-            RowDivider()
             ToggleRow(title: "Show Each New Step", detail: "The tiny island grows for a moment to show what the session it tracks is doing now.", isOn: $prefs.showStepPeeks)
             RowDivider()
-            SettingRow(title: "Sound when done") {
+            SettingRow(title: "Sound When Done") {
                 HStack(spacing: DS.Space.s) {
                     if prefs.playSound {
                         Picker("Sound", selection: $prefs.soundName) {
@@ -513,13 +506,9 @@ private struct VisualizerSection: View {
                     .frame(width: 300)
             }
             RowDivider()
-            ToggleRow(title: "Open Automatically When Something Starts", isOn: $prefs.visualizerAutoOpen)
-            RowDivider()
             ToggleRow(title: "Move With Your Music", detail: musicNote, isOn: $prefs.visualizerListens)
             RowDivider()
-            ToggleRow(title: "Full Screen", isOn: $prefs.visualizerFullScreen)
-            RowDivider()
-            ToggleRow(title: "Close When It's Done", isOn: $prefs.visualizerAutoClose)
+            ToggleRow(title: "Open When a Session Starts", isOn: $prefs.visualizerAutoOpen)
         }
     }
 
@@ -553,7 +542,7 @@ private struct GeneralSection: View {
 
     var body: some View {
         SettingsGroup(title: "General") {
-            SettingRow(title: "Open cloud sessions in", detail: openHint) {
+            SettingRow(title: "Open Cloud Sessions In", detail: openHint) {
                 BCSegmented(options: OpenTarget.allCases.map { SegmentOption(value: $0, label: $0.title) }, selection: $prefs.openSessionsIn)
                     .frame(width: 180)
             }
@@ -564,16 +553,10 @@ private struct GeneralSection: View {
             ))
             RowDivider()
             UpdateRow(updater: model.updater)
-            RowDivider()
-            ToggleRow(title: "Install Updates Automatically", isOn: $prefs.autoUpdate)
-            RowDivider()
-            SettingRow(title: "Welcome Tour") {
-                Button("Show") { model.showOnboarding() }.buttonStyle(SecondaryButtonStyle())
-            }
         }
 
         HStack {
-            Text("Turbo \(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev") · BetterCampus")
+            Text("Turbo build \(model.updater.installedBuild.map(String.init) ?? "dev") · BetterCampus")
                 .font(DS.Typography.caption)
                 .foregroundStyle(DS.Palette.textTertiary)
             Spacer()

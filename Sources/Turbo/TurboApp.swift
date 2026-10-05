@@ -74,6 +74,7 @@ final class StatusItemController: NSObject {
                 menu.addItem(withTitle: "Quiet Until Tomorrow", action: #selector(quietTomorrow), keyEquivalent: "").target = self
             }
             menu.addItem(.separator())
+            menu.addItem(withTitle: "Welcome Tour", action: #selector(tour), keyEquivalent: "").target = self
             menu.addItem(withTitle: "Quit Turbo", action: #selector(quit), keyEquivalent: "q").target = self
             item.menu = menu
             item.button?.performClick(nil)
@@ -92,4 +93,5 @@ final class StatusItemController: NSObject {
         model.setQuiet(for: morning.timeIntervalSinceNow)
     }
     @objc private func quit() { NSApp.terminate(nil) }
+    @objc private func tour() { model.showOnboarding() }
 }
