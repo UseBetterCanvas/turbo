@@ -55,7 +55,8 @@ public final class SessionLogTailer {
     }
 
     /// How long a log must stay quiet after a final-looking message before the turn counts as done.
-    public var finishDelay: TimeInterval = 6
+    /// Long enough to cover Claude writing out a big tool call after a "Let me look" line.
+    public var finishDelay: TimeInterval = 30
 
     private var files: [String: FileState] = [:]
     private var watched: [URL] = []

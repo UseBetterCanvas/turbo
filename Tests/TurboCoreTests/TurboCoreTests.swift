@@ -754,12 +754,28 @@ final class CoworkTranscriptTests: XCTestCase {
         tailer.poll(now: t0.addingTimeInterval(20))
         XCTAssertEqual(events.count, 1)
 
+        // A progress line followed by a slow tool call is not a finish.
+        events.removeAll()
+        try append([
+            #"{"type":"user","message":{"role":"user","content":"Now book the venue"}}"#,
+            #"{"type":"assistant","message":{"content":[{"type":"text","text":"Let me check availability."}]}}"#,
+        ])
+        tailer.poll(now: t0.addingTimeInterval(8))
+        tailer.poll(now: t0.addingTimeInterval(11))
+        try append([#"{"type":"assistant","message":{"content":[{"type":"tool_use","name":"WebFetch","input":{}}]}}"#])
+        tailer.poll(now: t0.addingTimeInterval(12))
+        tailer.poll(now: t0.addingTimeInterval(19))
+        XCTAssertFalse(events.contains { if case .turnComplete = $0.kind { return true } else { return false } })
+        try append([#"{"type":"user","message":{"content":[{"type":"tool_result","content":"ok"}]}}"#])
+        tailer.poll(now: t0.addingTimeInterval(20))
+
         // An explicit end_turn finishes right away.
         events.removeAll()
         try append([
             #"{"type":"user","message":{"role":"user","content":[{"type":"text","text":"Add a budget"}]}}"#,
             #"{"type":"assistant","message":{"content":[{"type":"text","text":"Budget added."}],"stop_reason":"end_turn"}}"#,
         ])
+        events.removeAll()
         tailer.poll(now: t0.addingTimeInterval(21))
         XCTAssertEqual(events.map(\.kind), [.promptSubmitted, .turnComplete(summary: "Budget added.")])
         tailer.poll(now: t0.addingTimeInterval(40))

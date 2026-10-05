@@ -235,16 +235,21 @@ private struct CloudSetupSteps: View {
                     .foregroundStyle(DS.Palette.textSecondary)
             }
             .padding(.top, DS.Space.xs)
-            Toggle(isOn: $prefs.cloudShareTitles) {
+            // The switch style draws only the switch, so the words sit beside it.
+            HStack(alignment: .center, spacing: DS.Space.m) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Name Cloud Sessions").font(DS.Typography.body)
-                    Text("Also send the first 6 words of each prompt, so sessions show a name instead of the repo. Copy the script again after changing this.")
+                    Text("Name Cloud Sessions").font(DS.Typography.bodyStrong).foregroundStyle(DS.Palette.textPrimary)
+                    Text("Show each cloud session by what it was asked, using the first 6 words of the prompt, instead of just the repo name. Copy the script again after changing this.")
                         .font(DS.Typography.caption)
                         .foregroundStyle(DS.Palette.textSecondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
+                Spacer(minLength: DS.Space.m)
+                Toggle("Name Cloud Sessions", isOn: $prefs.cloudShareTitles)
+                    .toggleStyle(BCSwitchStyle())
+                    .labelsHidden()
             }
-            .toggleStyle(BCSwitchStyle())
+            .padding(.top, DS.Space.xs)
         }
         .confirmationDialog("Make a new channel?", isPresented: $confirmReset) {
             Button("New Channel", role: .destructive) { model.resetCloudChannel() }
