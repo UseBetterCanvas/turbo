@@ -399,113 +399,330 @@ private struct HomeEmptyState: View {
     }
 }
 
-/// One session in full: what was asked, what it's doing, and every action that applies.
+/// One session as a conversation, iMessage style: what you asked on the right in Blurple,
+/// Claude's replies on the left, each step as a quiet line between them, and a typing bubble
+/// while it works. Actions live where the reply box would be.
 private struct SessionPane: View {
     @EnvironmentObject private var model: AppModel
+    @EnvironmentObject private var prefs: Preferences
     let session: AgentSession
-    @State private var latest: String?
+    /// For local sessions, the whole conversation read from Claude's transcript.
+    @State private var transcriptThread: [ThreadItem] = []
 
     var body: some View {
-        TimelineView(.periodic(from: .now, by: 1)) { context in
-            ScrollView {
-                VStack(alignment: .leading, spacing: DS.Space.l) {
-                    HStack(spacing: 14) {
-                        SessionIcon(session: session, size: 56)
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(session.projectName)
-                                .font(DSFont.display(22))
-                                .foregroundStyle(DS.Palette.textPrimary)
-                                .lineLimit(2)
-                            Text([session.place, session.agent.displayName, AgentSession.relative(session.lastActivityAt, now: context.date)].compactMap { $0 }.joined(separator: " · "))
-                                .font(DSFont.sans(13, .medium).monospacedDigit())
-                                .foregroundStyle(DS.Palette.textSecondary)
+        VStack(spacing: 0) {
+            ConversationHeader(session: session)
+            Rectangle().fill(Color.white.opacity(0.06)).frame(height: 1)
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(spacing: 6) {
+                        if items.isEmpty || (session.agent.isCloud && !prefs.cloudShareTitles) {
+                            Text(session.agent.isCloud && !prefs.cloudShareTitles
+                                 ? "Turn on Show Cloud Conversations in Settings to see prompts and replies here. For now, you'll see each step."
+                                 : "The conversation shows up here as it happens.")
+                                .font(DSFont.sans(12, .medium))
+                                .foregroundStyle(DS.Palette.textTertiary)
+                                .multilineTextAlignment(.center)
+                                .padding(.horizontal, 40)
+                                .padding(.vertical, 10)
                         }
-                        Spacer()
-                    }
-
-                    StatusLine(session: session, now: context.date)
-
-                    if let prompt = session.lastPrompt {
-                        section("Asked", prompt)
-                    }
-                    if let text = latest ?? Format.snippet(session.summary, limit: 600) {
-                        section(session.phase.isActive ? "Latest" : "Result", text)
-                    }
-                    if !session.recentSteps.isEmpty {
-                        VStack(alignment: .leading, spacing: 8) {
-                            Eyebrow(text: "Steps")
-                            HStack(spacing: 6) {
-                                ForEach(Array(session.recentSteps.suffix(6).enumerated()), id: \.offset) { _, tool in
-                                    Text(stepLabel(tool))
-                                        .font(DSFont.sans(11.5, .bold))
-                                        .foregroundStyle(DS.Palette.textPrimary.opacity(0.85))
-                                        .padding(.horizontal, 9)
-                                        .frame(height: 24)
-                                        .background(Capsule().fill(Color.white.opacity(0.08)))
-                                }
+                        ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
+                            if showsTime(at: index) {
+                                Text(timeLabel(item.date))
+                                    .font(DSFont.sans(11, .semibold))
+                                    .foregroundStyle(DS.Palette.textTertiary)
+                                    .padding(.top, 10)
+                                    .padding(.bottom, 2)
                             }
+                            ThreadRow(item: item, session: session, lastInRun: isLastInRun(index))
                         }
+                        if session.phase == .cooking {
+                            TypingBubble(caption: session.activityDetail ?? session.activity)
+                        }
+                        Color.clear.frame(height: 4).id("bottom")
                     }
-                    if session.lastPrompt == nil && latest == nil && session.summary == nil && session.agent.isCloud {
-                        Text("Cloud sessions share progress, not prompts or replies. Turn on Name Cloud Sessions in Settings to see what each one was asked.")
-                            .font(DS.Typography.caption)
-                            .foregroundStyle(DS.Palette.textTertiary)
-                    }
-                    actions
+                    .padding(.horizontal, DS.Space.xl)
+                    .padding(.vertical, DS.Space.m)
                 }
-                .padding(.horizontal, DS.Space.xl)
-                .padding(.bottom, DS.Space.xl)
-                .padding(.top, DS.Space.s)
+                .onAppear { proxy.scrollTo("bottom", anchor: .bottom) }
+                .onChange(of: items.count) { _ in
+                    withAnimation(DS.Motion.base) { proxy.scrollTo("bottom", anchor: .bottom) }
+                }
             }
+            ComposerBar(session: session)
         }
         .task(id: session.lastActivityAt) {
             guard let path = session.transcriptPath else { return }
-            let text = await Task.detached(priority: .utility) { ClaudeTranscript.lastAssistantText(atPath: path, currentTurnOnly: true) }.value
+            let thread = await Task.detached(priority: .utility) { ClaudeTranscript.thread(atPath: path) }.value
             guard !Task.isCancelled else { return }
-            latest = Format.snippet(text, limit: 600)
+            transcriptThread = thread
         }
     }
 
-    private func section(_ label: String, _ text: String) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Eyebrow(text: label)
-            Text(text)
-                .font(DSFont.sans(13.5, .medium))
-                .foregroundStyle(DS.Palette.textPrimary.opacity(0.92))
-                .textSelection(.enabled)
-                .fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(14)
-                .background(RoundedRectangle(cornerRadius: DS.Radius.l, style: .continuous).fill(DS.Palette.card))
+    /// The transcript when Turbo can read one (it has everything); otherwise what the hooks reported.
+    private var items: [ThreadItem] {
+        var base = transcriptThread.isEmpty ? session.thread : transcriptThread
+        // Waiting and done markers come from Turbo itself, not the transcript.
+        if !transcriptThread.isEmpty {
+            var next = (base.map(\.id).max() ?? 0) + 1
+            if case let .needsInput(message) = session.phase {
+                base.append(ThreadItem(id: next, kind: .needs, text: message, date: session.needsInputSince ?? Date()))
+                next += 1
+            } else if case .done = session.phase {
+                base.append(ThreadItem(id: next, kind: .finished(failed: session.failed), text: nil, date: session.finishedAt ?? Date()))
+            }
+        }
+        return base
+    }
+
+    private func showsTime(at index: Int) -> Bool {
+        let list = items
+        guard index > 0 else { return list[index].date != .distantPast }
+        let gap = list[index].date.timeIntervalSince(list[index - 1].date)
+        return list[index].date != .distantPast && gap > 15 * 60
+    }
+
+    private func timeLabel(_ date: Date) -> String {
+        let calendar = Calendar.current
+        let time = date.formatted(date: .omitted, time: .shortened)
+        if calendar.isDateInToday(date) { return "Today " + time }
+        if calendar.isDateInYesterday(date) { return "Yesterday " + time }
+        return date.formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day()) + " " + time
+    }
+
+    /// Reply bubbles in a row share one avatar, on the last of them, like Messages.
+    private func isLastInRun(_ index: Int) -> Bool {
+        let list = items
+        guard index + 1 < list.count else { return true }
+        return list[index + 1].kind != list[index].kind
+    }
+}
+
+/// Avatar, name and where it runs, with the status on the right.
+private struct ConversationHeader: View {
+    let session: AgentSession
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 1)) { context in
+            HStack(spacing: 12) {
+                SessionIcon(session: session, size: 40)
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: 6) {
+                        Text(session.projectName)
+                            .font(DSFont.sans(16, .heavy))
+                            .foregroundStyle(DS.Palette.textPrimary)
+                            .lineLimit(1)
+                        if session.agent.isCloud {
+                            Image(systemName: "cloud.fill").font(.system(size: 11)).foregroundStyle(DS.Palette.textTertiary)
+                        }
+                    }
+                    Text([session.place, session.agent.displayName].compactMap { $0 }.joined(separator: " · "))
+                        .font(DSFont.sans(12, .medium))
+                        .foregroundStyle(DS.Palette.textSecondary)
+                        .lineLimit(1)
+                }
+                Spacer(minLength: 8)
+                StatusLine(session: session, now: context.date)
+            }
+            .padding(.horizontal, DS.Space.xl)
+            .padding(.bottom, 12)
+        }
+    }
+}
+
+private struct ThreadRow: View {
+    let item: ThreadItem
+    let session: AgentSession
+    let lastInRun: Bool
+
+    var body: some View {
+        switch item.kind {
+        case .prompt:
+            HStack {
+                Spacer(minLength: 80)
+                Bubble(text: item.text ?? "", fill: DS.Palette.brand, foreground: .white, mine: true, tail: lastInRun)
+            }
+        case .reply:
+            HStack(alignment: .bottom, spacing: 8) {
+                Group {
+                    if lastInRun { AgentGlyph(agent: session.agent, size: 14).frame(width: 26, height: 26).background(Circle().fill(DS.Palette.card)) }
+                    else { Color.clear.frame(width: 26, height: 26) }
+                }
+                Bubble(text: item.text ?? "", fill: DS.Palette.card, foreground: DS.Palette.textPrimary, mine: false, tail: lastInRun)
+                Spacer(minLength: 80)
+            }
+        case let .step(tool):
+            HStack(spacing: 6) {
+                Image(systemName: Self.symbol(for: tool)).font(.system(size: 10, weight: .semibold))
+                Text([tool.map(Self.verb) ?? "Working", item.text].compactMap { $0 }.joined(separator: " · "))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            .font(DSFont.sans(11.5, .medium))
+            .foregroundStyle(DS.Palette.textTertiary)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 1)
+        case .needs:
+            Label(item.text.map { "Needs your OK: " + $0 } ?? "Needs your OK", systemImage: "hand.raised.fill")
+                .font(DSFont.sans(12, .semibold))
+                .foregroundStyle(DS.Palette.gold)
+                .lineLimit(2)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background(Capsule().fill(DS.Palette.gold.opacity(0.12)))
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 4)
+        case let .finished(failed):
+            Label(failed ? "Failed" : "Done", systemImage: failed ? "xmark.circle.fill" : "checkmark.circle.fill")
+                .font(DSFont.sans(11.5, .semibold))
+                .foregroundStyle(failed ? DS.Palette.bad : DS.Palette.ok)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 4)
         }
     }
 
-    @ViewBuilder private var actions: some View {
-        HStack(spacing: 8) {
-            if let pending = model.pendingApproval(for: session) {
-                Button("Allow") { model.decide(session, allow: true) }
-                    .buttonStyle(PrimaryButtonStyle())
-                if let rule = pending.rule {
-                    Button("Always Allow") { model.alwaysAllow(session) }
-                        .buttonStyle(SecondaryButtonStyle())
-                        .help("Allows \(rule) in this repo from now on")
+    static func verb(_ tool: String) -> String {
+        switch stepLabel(tool) {
+        case "Command": return "Ran a command"
+        case "Edit": return "Edited"
+        case "Read": return "Read"
+        case "Web": return "Searched the web"
+        case "Helper": return "Started a helper"
+        case "Plan": return "Updated the plan"
+        default: return "Used " + tool
+        }
+    }
+
+    static func symbol(for tool: String?) -> String {
+        switch tool.map(stepLabel) {
+        case "Command": return "terminal"
+        case "Edit": return "pencil"
+        case "Read": return "doc.text.magnifyingglass"
+        case "Web": return "globe"
+        case "Helper": return "person.2"
+        case "Plan": return "checklist"
+        default: return "gearshape"
+        }
+    }
+}
+
+/// A Messages-style bubble: rounded, with a softer corner on the side it came from.
+private struct Bubble: View {
+    let text: String
+    let fill: Color
+    let foreground: Color
+    let mine: Bool
+    let tail: Bool
+
+    var body: some View {
+        Text(text)
+            .font(DSFont.sans(13.5, .medium))
+            .foregroundStyle(foreground)
+            .textSelection(.enabled)
+            .lineLimit(18)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.horizontal, 13)
+            .padding(.vertical, 8)
+            .background(
+                BubbleShape(bottomLeading: !mine && tail ? 5 : 18, bottomTrailing: mine && tail ? 5 : 18)
+                    .fill(fill)
+            )
+    }
+}
+
+/// The "…" bubble while the agent works, with what it's doing underneath.
+private struct TypingBubble: View {
+    let caption: String
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        HStack(alignment: .bottom, spacing: 8) {
+            Color.clear.frame(width: 26, height: 26)
+            VStack(alignment: .leading, spacing: 4) {
+                TimelineView(.animation(minimumInterval: 1.0 / 20, paused: reduceMotion)) { context in
+                    let t = context.date.timeIntervalSinceReferenceDate
+                    HStack(spacing: 4) {
+                        ForEach(0..<3, id: \.self) { i in
+                            Circle()
+                                .fill(DS.Palette.textSecondary)
+                                .frame(width: 7, height: 7)
+                                .opacity(reduceMotion ? 0.7 : 0.35 + 0.65 * max(0, sin(t * 5 - Double(i) * 0.7)))
+                        }
+                    }
+                    .padding(.horizontal, 14)
+                    .frame(height: 34)
+                    .background(BubbleShape(bottomLeading: 5, bottomTrailing: 18).fill(DS.Palette.card))
                 }
-                Button("Deny") { model.decide(session, allow: false) }
-                    .buttonStyle(SecondaryButtonStyle())
-            }
-            StopButton(session: session)
-            if model.canOpen(session) {
-                Button(session.link != nil ? "Open Session" : "Go to Terminal") { model.open(session) }
-                    .buttonStyle(model.pendingApproval(for: session) == nil ? AnyButtonStyle(PrimaryButtonStyle()) : AnyButtonStyle(SecondaryButtonStyle()))
-            }
-            if !session.phase.isActive {
-                Button("Dismiss") {
-                    withAnimation(DS.Motion.base) { model.dismiss(session) }
-                }
-                .buttonStyle(GhostButtonStyle())
+                Text(caption)
+                    .font(DSFont.sans(11, .medium))
+                    .foregroundStyle(DS.Palette.textTertiary)
+                    .lineLimit(1)
+                    .padding(.leading, 4)
             }
             Spacer()
         }
+        .padding(.top, 2)
+    }
+}
+
+/// Where Messages has its reply box: Allow / Deny when it's waiting, otherwise Stop and a way
+/// to reply in the session itself.
+private struct ComposerBar: View {
+    @EnvironmentObject private var model: AppModel
+    let session: AgentSession
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Rectangle().fill(Color.white.opacity(0.06)).frame(height: 1)
+            HStack(spacing: 8) {
+                if let pending = model.pendingApproval(for: session) {
+                    Text(AppModel.approvalMessage(tool: pending.tool, detail: pending.detail))
+                        .font(DSFont.sans(12.5, .semibold))
+                        .foregroundStyle(DS.Palette.gold)
+                        .lineLimit(2)
+                    Spacer(minLength: 8)
+                    Button("Deny") { model.decide(session, allow: false) }.buttonStyle(SecondaryButtonStyle())
+                    if let rule = pending.rule {
+                        Button("Always Allow") { model.alwaysAllow(session) }
+                            .buttonStyle(SecondaryButtonStyle())
+                            .help("Allows \(rule) in this repo from now on")
+                    }
+                    Button("Allow") { model.decide(session, allow: true) }.buttonStyle(PrimaryButtonStyle())
+                } else {
+                    StopButton(session: session)
+                    Button {
+                        model.open(session)
+                    } label: {
+                        HStack {
+                            Text(model.canOpen(session) ? "Reply in \(session.link != nil ? "the session" : "the terminal")…" : "Replies happen in the session itself")
+                                .font(DSFont.sans(13, .medium))
+                                .foregroundStyle(DS.Palette.textTertiary)
+                            Spacer()
+                            if model.canOpen(session) {
+                                Image(systemName: "arrow.up.circle.fill")
+                                    .font(.system(size: 20))
+                                    .foregroundStyle(DS.Palette.brand)
+                            }
+                        }
+                        .padding(.leading, 14)
+                        .padding(.trailing, 5)
+                        .frame(height: 34)
+                        .background(Capsule().strokeBorder(Color.white.opacity(0.14), lineWidth: 1))
+                        .contentShape(Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(!model.canOpen(session))
+                    .help("Opens the session so you can reply")
+                    if !session.phase.isActive {
+                        Button("Dismiss") { withAnimation(DS.Motion.base) { model.dismiss(session) } }
+                            .buttonStyle(GhostButtonStyle())
+                    }
+                }
+            }
+            .padding(.horizontal, DS.Space.xl)
+            .padding(.vertical, 12)
+        }
+        .padding(.bottom, 6)
     }
 }
 
@@ -555,5 +772,29 @@ struct AnyButtonStyle: ButtonStyle {
 
     func makeBody(configuration: Configuration) -> some View {
         make(configuration)
+    }
+}
+
+/// A rounded rectangle with its own bottom corners (macOS 13 has no uneven rounded rectangle).
+struct BubbleShape: Shape {
+    var radius: CGFloat = 18
+    var bottomLeading: CGFloat
+    var bottomTrailing: CGFloat
+
+    func path(in rect: CGRect) -> Path {
+        let r = min(radius, rect.height / 2, rect.width / 2)
+        let bl = min(bottomLeading, rect.height / 2), br = min(bottomTrailing, rect.height / 2)
+        var p = Path()
+        p.move(to: CGPoint(x: rect.minX + r, y: rect.minY))
+        p.addLine(to: CGPoint(x: rect.maxX - r, y: rect.minY))
+        p.addArc(center: CGPoint(x: rect.maxX - r, y: rect.minY + r), radius: r, startAngle: .degrees(-90), endAngle: .degrees(0), clockwise: false)
+        p.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY - br))
+        p.addArc(center: CGPoint(x: rect.maxX - br, y: rect.maxY - br), radius: br, startAngle: .degrees(0), endAngle: .degrees(90), clockwise: false)
+        p.addLine(to: CGPoint(x: rect.minX + bl, y: rect.maxY))
+        p.addArc(center: CGPoint(x: rect.minX + bl, y: rect.maxY - bl), radius: bl, startAngle: .degrees(90), endAngle: .degrees(180), clockwise: false)
+        p.addLine(to: CGPoint(x: rect.minX, y: rect.minY + r))
+        p.addArc(center: CGPoint(x: rect.minX + r, y: rect.minY + r), radius: r, startAngle: .degrees(180), endAngle: .degrees(270), clockwise: false)
+        p.closeSubpath()
+        return p
     }
 }

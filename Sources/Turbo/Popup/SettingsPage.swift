@@ -238,14 +238,14 @@ private struct CloudSetupSteps: View {
             // The switch style draws only the switch, so the words sit beside it.
             HStack(alignment: .center, spacing: DS.Space.m) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Name Cloud Sessions").font(DS.Typography.bodyStrong).foregroundStyle(DS.Palette.textPrimary)
-                    Text("Show each cloud session by what it was asked, using the first 6 words of the prompt, instead of just the repo name. Copy the script again after changing this.")
+                    Text("Show Cloud Conversations").font(DS.Typography.bodyStrong).foregroundStyle(DS.Palette.textPrimary)
+                    Text("Send your prompts and Claude's final replies too, so cloud sessions read like a chat and get real names. Copy the script again after changing this.")
                         .font(DS.Typography.caption)
                         .foregroundStyle(DS.Palette.textSecondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer(minLength: DS.Space.m)
-                Toggle("Name Cloud Sessions", isOn: $prefs.cloudShareTitles)
+                Toggle("Show Cloud Conversations", isOn: $prefs.cloudShareTitles)
                     .toggleStyle(BCSwitchStyle())
                     .labelsHidden()
             }

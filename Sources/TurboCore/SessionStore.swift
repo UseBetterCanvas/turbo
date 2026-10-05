@@ -14,6 +14,34 @@ public enum SessionPhase: Equatable, Sendable {
     }
 }
 
+/// One entry in a session's conversation, as Turbo saw it.
+public struct ThreadItem: Equatable, Sendable, Identifiable {
+    public enum Kind: Equatable, Sendable {
+        /// Something you asked.
+        case prompt
+        /// What the agent said back.
+        case reply
+        /// A step it took (the tool's name), with its own description when it gave one.
+        case step(tool: String?)
+        /// Waiting on you.
+        case needs
+        /// The turn ended (or failed).
+        case finished(failed: Bool)
+    }
+
+    public var id: Int
+    public var kind: Kind
+    public var text: String?
+    public var date: Date
+
+    public init(id: Int, kind: Kind, text: String?, date: Date) {
+        self.id = id
+        self.kind = kind
+        self.text = text
+        self.date = date
+    }
+}
+
 public struct AgentSession: Identifiable, Equatable, Sendable {
     public var id: String { "\(agent.rawValue):\(sessionID)" }
     public let agent: Agent
@@ -36,6 +64,8 @@ public struct AgentSession: Identifiable, Equatable, Sendable {
     public var failed = false
     /// What was asked to start this turn (local sessions only).
     public var lastPrompt: String?
+    /// The conversation as Turbo saw it: prompts, steps, replies. Newest last, capped.
+    public var thread: [ThreadItem] = []
     /// The agent's own words for what it's doing right now, when it gives them.
     public var activityDetail: String?
     /// When it started waiting on you. Nil unless it's waiting.
@@ -199,6 +229,7 @@ public final class SessionStore {
         if case .needsInput = s.phase {} else { s.needsInputSince = nil }
         // After any turn start above, which clears it.
         if case .activity = event.kind, let detail = event.activityDetail { s.activityDetail = detail }
+        record(event, in: &s, changes: changes)
         sessions[key] = s
         return changes
     }
@@ -227,6 +258,7 @@ public final class SessionStore {
     public func setSummary(_ summary: String, for id: String) {
         guard var s = sessions[id], case .done(nil) = s.phase else { return }
         s.phase = .done(summary: summary)
+        Self.attachLateReply(summary, to: &s, at: Date())
         sessions[id] = s
     }
 
@@ -236,6 +268,52 @@ public final class SessionStore {
 
     public func removeAll() {
         sessions.removeAll()
+    }
+
+    private static let threadLimit = 80
+
+    /// Adds what just happened to the session's conversation.
+    private func record(_ event: AgentEvent, in s: inout AgentSession, changes: [StoreChange]) {
+        var item: (ThreadItem.Kind, String?)?
+        switch event.kind {
+        case .promptSubmitted:
+            if let prompt = event.prompt?.trimmingCharacters(in: .whitespacesAndNewlines), !prompt.isEmpty,
+               !(s.thread.last?.kind == .prompt && s.thread.last?.text == prompt) {
+                item = (.prompt, prompt)
+            }
+        case let .activity(tool):
+            // One line per step: the pre and post hooks of the same call collapse.
+            guard tool != nil || event.activityDetail != nil else { break }
+            if let last = s.thread.last, last.kind == .step(tool: tool), last.text == event.activityDetail { break }
+            item = (.step(tool: tool), event.activityDetail)
+        case let .needsInput(message):
+            if s.thread.last?.kind != .needs || s.thread.last?.text != message { item = (.needs, message) }
+        case let .turnComplete(summary), let .turnFailed(summary):
+            guard changes.contains(where: { if case .finished = $0 { return true } else { return false } }) else {
+                // A late summary for a turn already shown as done: attach it as the reply.
+                if let summary { Self.attachLateReply(summary, to: &s, at: event.date) }
+                return
+            }
+            if let summary, !summary.isEmpty { append(.reply, summary, to: &s, at: event.date) }
+            if case .turnFailed = event.kind { item = (.finished(failed: true), nil) } else { item = (.finished(failed: false), nil) }
+        case .sessionStarted, .sessionEnded:
+            break
+        }
+        if let item { append(item.0, item.1, to: &s, at: event.date) }
+    }
+
+    /// A reply that arrives after the turn was marked done goes just before the "done" line.
+    static func attachLateReply(_ text: String, to s: inout AgentSession, at date: Date) {
+        guard let last = s.thread.last, case .finished = last.kind,
+              !s.thread.suffix(4).contains(where: { $0.kind == .reply && $0.text == text }) else { return }
+        let id = (s.thread.map(\.id).max() ?? 0) + 1
+        s.thread.insert(ThreadItem(id: id, kind: .reply, text: text, date: date), at: s.thread.count - 1)
+    }
+
+    private func append(_ kind: ThreadItem.Kind, _ text: String?, to s: inout AgentSession, at date: Date) {
+        let id = (s.thread.map(\.id).max() ?? 0) + 1
+        s.thread.append(ThreadItem(id: id, kind: kind, text: text, date: date))
+        if s.thread.count > Self.threadLimit { s.thread.removeFirst(s.thread.count - Self.threadLimit) }
     }
 
     private func startTurn(_ s: inout AgentSession, at now: Date) {

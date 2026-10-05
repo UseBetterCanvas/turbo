@@ -567,6 +567,7 @@ final class ActivityDetailTests: XCTestCase {
         XCTAssertFalse(CloudRelay.setupScript(channel: "turbo-x").contains("UserPromptSubmit\":"))
         XCTAssertFalse(CloudRelay.relayScript(channel: "turbo-x").contains("out[\"prompt\"]"))
         XCTAssertTrue(CloudRelay.relayScript(channel: "turbo-x", shareTitles: true).contains("out[\"prompt\"]"))
+        XCTAssertTrue(CloudRelay.relayScript(channel: "turbo-x", shareTitles: true).contains("out[\"reply\"]"))
         let quotes = { (s: String) in s.filter { $0 == "'" }.count }
         XCTAssertEqual(quotes(CloudRelay.relayScript(channel: "turbo-x", shareTitles: true)), quotes(CloudRelay.relayScript(channel: "turbo-x")), "the python runs inside single quotes")
     }
@@ -594,7 +595,7 @@ final class ActivityDetailTests: XCTestCase {
             let out = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(firstLine.utf8)) as? [String: Any])
             XCTAssertEqual(out["cwd"] as? String, "Clippy")
             XCTAssertEqual(out["activity"] as? String, "Run tests")
-            XCTAssertEqual(out["prompt"] as? String, share ? "please fix the flaky syrup tests" : nil)
+            XCTAssertEqual(out["prompt"] as? String, share ? "please fix the flaky syrup tests now ok" : nil)
         }
     }
 }
@@ -788,5 +789,81 @@ final class CoworkTranscriptTests: XCTestCase {
         XCTAssertEqual(kind(#"{"type":"user","message":{"content":"<command-name>/clear</command-name>"}}"#), .event(.activity(tool: nil)))
         XCTAssertNil(kind(#"{"type":"user","isMeta":true,"message":{"content":"caveat"}}"#))
         XCTAssertNil(kind(#"{"type":"queue-operation","operation":"enqueue"}"#))
+    }
+}
+
+final class CloudReplyTests: XCTestCase {
+    /// With sharing on, the Stop hook reads Claude's last reply from the transcript.
+    func testRelaySendsFinalReplyOnStop() throws {
+        let python = URL(fileURLWithPath: "/usr/bin/python3")
+        guard FileManager.default.isExecutableFile(atPath: python.path) else { throw XCTSkip("no python3") }
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("turbo-reply-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let transcript = dir.appendingPathComponent("t.jsonl")
+        try [
+            #"{"type":"user","message":{"content":"fix it"}}"#,
+            #"{"type":"assistant","message":{"content":[{"type":"text","text":"Fixed the bug."}]}}"#,
+            #"{"type":"assistant","isSidechain":true,"message":{"content":[{"type":"text","text":"subagent noise"}]}}"#,
+        ].joined(separator: "\n").write(to: transcript, atomically: true, encoding: .utf8)
+        let script = CloudRelay.relayScript(channel: "turbo-x", shareTitles: true)
+        let start = try XCTUnwrap(script.range(of: "python3 -c '")).upperBound
+        let end = try XCTUnwrap(script.range(of: "' 2>/dev/null) || exit 0")).lowerBound
+        let process = Process()
+        process.executableURL = python
+        process.arguments = ["-c", String(script[start..<end])]
+        let input = Pipe(), output = Pipe()
+        process.standardInput = input
+        process.standardOutput = output
+        try process.run()
+        let hook = try JSONSerialization.data(withJSONObject: ["hook_event_name": "Stop", "session_id": "s", "cwd": "/w/app", "transcript_path": transcript.path])
+        input.fileHandleForWriting.write(hook)
+        try input.fileHandleForWriting.close()
+        process.waitUntilExit()
+        let firstLine = String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self).split(separator: "\n").first ?? ""
+        let out = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(firstLine.utf8)) as? [String: Any])
+        XCTAssertEqual(out["reply"] as? String, "Fixed the bug.")
+        // And the Mac reads it as the turn's summary.
+        let envelope = try JSONSerialization.data(withJSONObject: ["event": "message", "id": "1", "message": String(firstLine)])
+        XCTAssertEqual(EventParser.parseRelayLine(envelope)?.event?.kind, .turnComplete(summary: "Fixed the bug."))
+    }
+
+    func testThreadRecordsTheConversation() {
+        let store = SessionStore()
+        let t = Date()
+        _ = store.apply(AgentEvent(agent: .claude, sessionID: "a", kind: .promptSubmitted, prompt: "Fix login", date: t))
+        _ = store.apply(AgentEvent(agent: .claude, sessionID: "a", kind: .activity(tool: "Bash"), date: t).with(activityDetail: "Run tests"))
+        _ = store.apply(AgentEvent(agent: .claude, sessionID: "a", kind: .activity(tool: "Bash"), date: t).with(activityDetail: "Run tests"))
+        _ = store.apply(AgentEvent(agent: .claude, sessionID: "a", kind: .needsInput(message: "Wants to run rm"), date: t))
+        _ = store.apply(AgentEvent(agent: .claude, sessionID: "a", kind: .activity(tool: "Bash"), date: t))
+        _ = store.apply(AgentEvent(agent: .claude, sessionID: "a", kind: .turnComplete(summary: "Login fixed."), date: t))
+        let kinds = store.sorted.first?.thread.map(\.kind)
+        XCTAssertEqual(kinds, [.prompt, .step(tool: "Bash"), .needs, .step(tool: "Bash"), .reply, .finished(failed: false)])
+        // A summary that shows up later lands before the "done" line, once.
+        _ = store.apply(AgentEvent(agent: .claude, sessionID: "b", kind: .promptSubmitted, prompt: "Go", date: t))
+        _ = store.apply(AgentEvent(agent: .claude, sessionID: "b", kind: .turnComplete(summary: nil), date: t))
+        store.setSummary("All done.", for: "claude:b")
+        store.setSummary("All done.", for: "claude:b")
+        XCTAssertEqual(store.sessions["claude:b"]?.thread.map(\.kind), [.prompt, .reply, .finished(failed: false)])
+    }
+}
+
+final class TranscriptThreadTests: XCTestCase {
+    func testTranscriptBecomesAConversation() {
+        let lines = [
+            #"{"type":"user","timestamp":"2026-10-05T10:00:00.000Z","message":{"role":"user","content":"Fix the login bug"}}"#,
+            #"{"type":"assistant","message":{"content":[{"type":"text","text":"Looking now."}]}}"#,
+            #"{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"file_path":"/w/app/Login.swift"}}]}}"#,
+            #"{"type":"user","message":{"content":[{"type":"tool_result","content":"..."}]}}"#,
+            #"{"type":"assistant","isSidechain":true,"message":{"content":[{"type":"text","text":"subagent"}]}}"#,
+            #"{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"npm test","description":"Run tests"}}]}}"#,
+            #"{"type":"assistant","message":{"content":[{"type":"text","text":"Fixed it."}]}}"#,
+            #"{"type":"assistant","message":{"content":[{"type":"text","text":"Tests pass."}]}}"#,
+            #"{"type":"user","message":{"content":"<command-name>/clear</command-name>"}}"#,
+        ].joined(separator: "\n")
+        let items = ClaudeTranscript.thread(inJSONL: Data(lines.utf8))
+        XCTAssertEqual(items.map(\.kind), [.prompt, .reply, .step(tool: "Read"), .step(tool: "Bash"), .reply])
+        XCTAssertEqual(items.map(\.text), ["Fix the login bug", "Looking now.", "Login.swift", "Run tests", "Fixed it.\n\nTests pass."])
+        XCTAssertEqual(items.first?.date, ISO8601DateFormatter().date(from: "2026-10-05T10:00:00Z"))
     }
 }
