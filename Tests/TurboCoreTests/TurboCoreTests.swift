@@ -1152,6 +1152,8 @@ final class PlanUsageEdgeTests: XCTestCase {
         ])
         XCTAssertEqual(MarkdownBlock.parse("plain text"), [.paragraph("plain text")])
         XCTAssertEqual(MarkdownBlock.parse("#hashtag"), [.paragraph("#hashtag")])
+        XCTAssertEqual(MarkdownBlock.parse("Run this:\n\n    swift build\n      --verbose\n\nDone."),
+                       [.paragraph("Run this:"), .code("swift build\n  --verbose"), .paragraph("Done.")])
     }
 
     func testPromptImages() throws {
@@ -1177,6 +1179,22 @@ final class PlanUsageEdgeTests: XCTestCase {
         session.thread = [ThreadItem(id: 1, kind: .prompt, text: "look", date: Date())]
         SessionStore.attachImages(event.promptImages, to: &session, at: Date())
         XCTAssertEqual(session.thread[0].images, event.promptImages)
+        // A later turn with no text gets its own image prompt instead of the old one's.
+        session.thread.append(ThreadItem(id: 2, kind: .finished(failed: false), text: nil, date: Date()))
+        let later = [URL(string: "https://ntfy.sh/file/b.png")!]
+        SessionStore.attachImages(later, to: &session, at: Date())
+        XCTAssertEqual(session.thread.last?.kind, .prompt)
+        XCTAssertEqual(session.thread.last?.images, later)
+        XCTAssertEqual(session.thread[0].images, event.promptImages)
+
+        // A big image record before the read window is still read whole.
+        let big = Data(repeating: 0x41, count: 300_000).base64EncodedString()
+        let record = #"{"type":"user","uuid":"u9","message":{"role":"user","content":[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"\#(big)"}},{"type":"text","text":"big one"}]}}"#
+        let file = dir.appendingPathComponent("t.jsonl")
+        try Data((record + "\n").utf8).write(to: file)
+        let read = ClaudeTranscript.thread(atPath: file.path, tailBytes: 1000, imageDirectory: dir)
+        XCTAssertEqual(read.first?.text, "big one")
+        XCTAssertEqual(read.first?.images.count, 1)
 
         let script = CloudRelay.relayScript(channel: "turbo-x", shareTitles: true)
         XCTAssertTrue(script.contains("https://ntfy.sh/turbo-x-files"))

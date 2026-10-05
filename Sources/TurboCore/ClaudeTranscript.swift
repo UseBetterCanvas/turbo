@@ -38,7 +38,22 @@ public enum ClaudeTranscript {
         guard let handle = FileHandle(forReadingAtPath: path) else { return [] }
         defer { try? handle.close() }
         let size = handle.seekToEndOfFile()
-        let start = size > UInt64(tailBytes) ? size - UInt64(tailBytes) : 0
+        var start = size > UInt64(tailBytes) ? size - UInt64(tailBytes) : 0
+        // Back up to a record boundary so a prompt carrying a big pasted image is read whole
+        // (up to 16 MB extra, the most an image record can be).
+        let chunk: UInt64 = 256 * 1024
+        var searched: UInt64 = 0
+        boundary: while start > 0 && searched < 16 * 1024 * 1024 {
+            let from = start > chunk ? start - chunk : 0
+            handle.seek(toFileOffset: from)
+            let bytes = handle.readData(ofLength: Int(start - from))
+            if let newline = bytes.lastIndex(of: 0x0A) {
+                start = from + UInt64(newline - bytes.startIndex) + 1
+                break boundary
+            }
+            searched += start - from
+            start = from
+        }
         handle.seek(toFileOffset: start)
         return thread(inJSONL: handle.readDataToEndOfFile(), limit: limit, imageDirectory: imageDirectory)
     }

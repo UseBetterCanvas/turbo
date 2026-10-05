@@ -301,6 +301,10 @@ final class AppModel: ObservableObject {
                 let list = self.queuedReplies[key] ?? []
                 // Match the exact reply the script picked up; fall back to the oldest.
                 if let reply = list.first(where: { $0.id == event.continuedReplyID }) ?? list.first {
+                    // The turn that just ended keeps its images before your reply starts the next one.
+                    if self.preferences.cloudShareTitles {
+                        self.store.attachImages(event.promptImages, toSession: key, at: event.date)
+                    }
                     self.replyDelivered(agent: event.agent, sessionID: event.sessionID ?? "", replyID: reply.id, text: reply.text)
                     return
                 }

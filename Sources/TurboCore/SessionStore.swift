@@ -289,15 +289,24 @@ public final class SessionStore {
         sessions[id] = nil
     }
 
+    /// Images for a turn whose Stop event is otherwise consumed (a queued reply carried it on).
+    public func attachImages(_ images: [URL], toSession id: String, at date: Date) {
+        guard var s = sessions[id], !images.isEmpty else { return }
+        Self.attachImages(images, to: &s, at: date)
+        sessions[id] = s
+    }
+
     public func removeAll() {
         sessions.removeAll()
     }
 
     private static let threadLimit = 80
 
-    /// A cloud prompt's images arrive when its turn ends: put them on that prompt.
+    /// A cloud prompt's images arrive when its turn ends: put them on this turn's prompt, or on a
+    /// new image-only prompt when the turn had no text (an earlier turn's prompt never gets them).
     static func attachImages(_ images: [URL], to s: inout AgentSession, at date: Date) {
-        if let index = s.thread.lastIndex(where: { $0.kind == .prompt }) {
+        let turnStart = (s.thread.lastIndex { if case .finished = $0.kind { return true } else { return false } } ?? -1) + 1
+        if let index = s.thread.lastIndex(where: { $0.kind == .prompt }), index >= turnStart {
             if s.thread[index].images.isEmpty { s.thread[index].images = images }
             return
         }

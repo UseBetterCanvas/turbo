@@ -644,7 +644,7 @@ private struct ThreadRow: View {
                     .padding(.vertical, 6)
                     .background(Capsule().fill(DS.Palette.gold.opacity(0.12)))
                 // Turbo can't answer this one itself (no Allow bar below), so say where to go.
-                if lastInRun, session.phase == .needsInput, model.pendingApproval(for: session) == nil {
+                if lastInRun, case .needsInput = session.phase, model.pendingApproval(for: session) == nil {
                     HStack(spacing: 8) {
                         Text("Answer it in \(session.agent.displayName).")
                             .font(DSFont.sans(11.5, .medium))

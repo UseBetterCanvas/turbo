@@ -23,6 +23,7 @@ public enum MarkdownBlock: Equatable, Sendable {
             paragraph = []
         }
 
+        var indentedCode = false
         for rawLine in markdown.replacingOccurrences(of: "\r\n", with: "\n").components(separatedBy: "\n") {
             let trimmed = rawLine.trimmingCharacters(in: .whitespaces)
             if trimmed.hasPrefix("```") {
@@ -36,6 +37,8 @@ public enum MarkdownBlock: Equatable, Sendable {
                 continue
             }
             if code != nil { code?.append(rawLine); continue }
+            // Indented code runs until the first line that isn't indented code.
+            if indentedCode, !(rawLine.hasPrefix("    ") || rawLine.hasPrefix("\t")) { indentedCode = false }
             if trimmed.isEmpty { flushParagraph(); continue }
 
             let indent = rawLine.prefix { $0 == " " || $0 == "\t" }.reduce(0) { $0 + ($1 == "\t" ? 4 : 1) }
@@ -68,6 +71,22 @@ public enum MarkdownBlock: Equatable, Sendable {
                     blocks.append(.quote(text))
                 }
                 continue
+            }
+            // Four-space indented code (outside a list): keep its lines and indentation.
+            if paragraph.isEmpty, indent >= 4 {
+                let isListContext: Bool
+                if case .listItem? = blocks.last { isListContext = true } else { isListContext = false }
+                if !isListContext {
+                    let line = String(rawLine.drop { $0 == " " || $0 == "\t" })
+                    let kept = String(repeating: " ", count: max(0, indent - 4)) + line
+                    if indentedCode, case .code(let previous)? = blocks.last {
+                        blocks[blocks.count - 1] = .code(previous + "\n" + kept)
+                    } else {
+                        blocks.append(.code(kept))
+                    }
+                    indentedCode = true
+                    continue
+                }
             }
             // A wrapped line continues the list item above it.
             if paragraph.isEmpty, indent > 0, case .listItem(let marker, let text, let d)? = blocks.last {
