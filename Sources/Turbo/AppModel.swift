@@ -745,6 +745,8 @@ final class AppModel: ObservableObject {
         }
         seen.remove(session.id)
         nudged.remove(session.id)
+        // A held permission prompt goes back to the terminal instead of waiting on a row that's gone.
+        releaseApprovals(for: session.id)
         store.remove(id: session.id)
         sessions = store.sorted
         dropSpotlights(for: session.id)
@@ -1200,6 +1202,13 @@ final class AppModel: ObservableObject {
     func clearFinished() {
         for session in sessions where !session.phase.isActive { store.remove(id: session.id) }
         sessions = store.sorted
+        if !sessions.contains(where: { $0.id == selectedSessionID }) { selectedSessionID = board.all.first?.id }
+    }
+
+    /// Empties the list. A session that's still running comes back when it does something new.
+    func clearAll() {
+        for session in sessions { dismiss(session) }
+        selectedSessionID = nil
     }
 
     func playSound(named name: String) {

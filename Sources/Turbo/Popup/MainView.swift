@@ -59,6 +59,10 @@ private struct MainSidebar: View {
                 SearchField(text: $query)
                 NewSessionMenu()
             }
+            .contextMenu {
+                Button("Clear Finished") { model.clearFinished() }
+                Button("Clear All") { model.clearAll() }
+            }
             .padding(.horizontal, 12)
             .padding(.bottom, 10)
 
@@ -84,6 +88,22 @@ private struct MainSidebar: View {
             }
 
             Spacer(minLength: 0)
+
+            let finished = model.sessions.filter { !$0.phase.isActive }.count
+            if finished > 0 {
+                Button { withAnimation(DS.Motion.base) { model.clearFinished() } } label: {
+                    Label("Clear \(finished) Finished", systemImage: "checkmark.circle")
+                        .font(DSFont.sans(12, .semibold))
+                        .foregroundStyle(DS.Palette.textSecondary)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 30)
+                        .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(Color.white.opacity(0.06)))
+                }
+                .buttonStyle(PressableStyle())
+                .padding(.horizontal, 12)
+                .padding(.bottom, 10)
+                .help("Removes finished sessions from the list. Right-click a session for Clear All.")
+            }
 
             Rectangle().fill(Color.white.opacity(0.06)).frame(height: 1).padding(.horizontal, 12)
 
@@ -181,10 +201,30 @@ private struct SidebarRow: View {
                 model.popupPage = .home
                 model.markSeen(session)
             }
+            .overlay(alignment: .trailing) {
+                // Clear it from the list right where you're looking.
+                if hovering {
+                    Button { withAnimation(DS.Motion.base) { model.dismiss(session) } } label: {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 9, weight: .bold))
+                            .foregroundStyle(DS.Palette.textSecondary)
+                            .frame(width: 22, height: 22)
+                            .background(Circle().fill(DS.Palette.overlay))
+                    }
+                    .buttonStyle(PressableStyle())
+                    .hoverTip(session.phase.isActive ? "Remove (returns on new activity)" : "Remove")
+                    .padding(.trailing, 10)
+                    .transition(.opacity)
+                }
+            }
             .contextMenu {
                 if model.canOpen(session) { Button("Open") { model.open(session) } }
                 if model.stopMethod(for: session) != nil { Button("Stop") { model.stop(session) } }
-                if !session.phase.isActive { Button("Dismiss") { model.dismiss(session) } }
+                Divider()
+                Button("Remove from Turbo") { model.dismiss(session) }
+                Button("Clear Finished") { model.clearFinished() }
+                    .disabled(!model.sessions.contains { !$0.phase.isActive })
+                Button("Clear All") { model.clearAll() }
             }
             .animation(DS.Motion.fast, value: hovering)
     }
