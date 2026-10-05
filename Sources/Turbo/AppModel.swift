@@ -976,8 +976,12 @@ final class AppModel: ObservableObject {
         var untracked: [String: Int] = [:]
         for path in (git(["ls-files", "--others", "--exclude-standard"], in: cwd) ?? "").split(whereSeparator: \.isNewline).prefix(200) {
             let url = URL(fileURLWithPath: cwd).appendingPathComponent(String(path))
-            let size = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int) ?? 0
-            let lines = size < 1_000_000 ? ((try? Data(contentsOf: url)).map { $0.filter { $0 == 0x0A }.count } ?? 0) : 0
+            var lines = 0
+            let attributes = try? FileManager.default.attributesOfItem(atPath: url.path)
+            let size = (attributes?[.size] as? NSNumber)?.intValue ?? 0
+            if size < 1_000_000, let data = try? Data(contentsOf: url) {
+                lines = data.reduce(0) { $1 == 0x0A ? $0 + 1 : $0 }
+            }
             untracked[String(path)] = lines
         }
         return WorktreeSnapshot(numstat: numstat, untracked: untracked)
