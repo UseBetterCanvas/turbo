@@ -915,7 +915,7 @@ final class CoworkPluginTests: XCTestCase {
         XCTAssertEqual(Set(hooks.keys), Set(CloudRelay.events))
         let pre = try XCTUnwrap((hooks["PreToolUse"] as? [[String: Any]])?.first)
         XCTAssertEqual(pre["matcher"] as? String, "*")
-        XCTAssertEqual(((pre["hooks"] as? [[String: Any]])?.first?["command"]) as? String, "${CLAUDE_PLUGIN_ROOT}/hooks/turbo-relay.sh")
+        XCTAssertEqual(((pre["hooks"] as? [[String: Any]])?.first?["command"]) as? String, "\"${CLAUDE_PLUGIN_ROOT}/hooks/turbo-relay.sh\"")
         XCTAssertTrue(try XCTUnwrap(files["hooks/turbo-relay.sh"]).contains(#"out["source"] = "cowork""#))
     }
 

@@ -100,6 +100,8 @@ final class Preferences: ObservableObject {
     @Published var cloudShareTitles: Bool { didSet { defaults.set(cloudShareTitles, forKey: Key.cloudShareTitles) } }
     /// The setup script you last copied, so Turbo can tell you when there's a newer one.
     @Published var copiedCloudScript: String { didSet { defaults.set(copiedCloudScript, forKey: Key.copiedCloudScript) } }
+    /// What the last saved Cowork plugin was built with (empty if never saved).
+    @Published var savedCoworkPlugin: String { didSet { defaults.set(savedCoworkPlugin, forKey: Key.savedCoworkPlugin) } }
     /// Install new versions on their own when nothing's cooking.
     @Published var autoUpdate: Bool { didSet { defaults.set(autoUpdate, forKey: Key.autoUpdate) } }
     /// The tiny island briefly shows each new step of the session it tracks.
@@ -138,6 +140,7 @@ final class Preferences: ObservableObject {
         static let onboarded = "hasOnboarded"
         static let cloudShareTitles = "cloudShareTitles"
         static let copiedCloudScript = "copiedCloudScript"
+        static let savedCoworkPlugin = "savedCoworkPlugin"
         static let autoUpdate = "autoUpdate"
         static let showStepPeeks = "showStepPeeks"
         static let visualizerListens = "visualizerListens"
@@ -203,6 +206,7 @@ final class Preferences: ObservableObject {
         // Set up cloud before Turbo tracked the script? That one predates Stop and step details.
         copiedCloudScript = defaults.string(forKey: Key.copiedCloudScript) ?? (defaults.bool(forKey: Key.cloudEnabled) ? "legacy" : "")
         autoUpdate = defaults.bool(forKey: Key.autoUpdate)
+        savedCoworkPlugin = defaults.string(forKey: Key.savedCoworkPlugin) ?? ""
         showStepPeeks = defaults.bool(forKey: Key.showStepPeeks)
         visualizerListens = defaults.bool(forKey: Key.visualizerListens)
         migrateVisualizerMode()

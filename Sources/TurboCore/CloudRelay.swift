@@ -167,8 +167,15 @@ public enum CloudRelay {
     /// Turbo as a Cowork plugin: the same relay, run by Cowork's plugin hooks, for Cowork tasks
     /// that run in the cloud. Returns the plugin's files (path → contents); the relay script is the
     /// one file that must be executable.
+    /// What a saved plugin was built with. When this changes (new channel, sharing turned on or
+    /// off), the installed plugin is out of date and needs uploading again.
+    public static func coworkPluginSignature(channel: String, shareTitles: Bool) -> String {
+        "\(channel)|\(shareTitles ? "share" : "private")|v1"
+    }
+
     public static func coworkPlugin(channel: String, server: URL = defaultServer, shareTitles: Bool = false) -> [String: String] {
-        let command = "${CLAUDE_PLUGIN_ROOT}/hooks/turbo-relay.sh"
+        // Quoted, so an install path with spaces still runs.
+        let command = "\"${CLAUDE_PLUGIN_ROOT}/hooks/turbo-relay.sh\""
         var hooks: [String: Any] = [:]
         for event in events {
             var group: [String: Any] = ["hooks": [["type": "command", "command": command]]]

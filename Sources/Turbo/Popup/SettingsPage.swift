@@ -254,7 +254,7 @@ private struct CloudSetupSteps: View {
         .confirmationDialog("Make a new channel?", isPresented: $confirmReset) {
             Button("New Channel", role: .destructive) { model.resetCloudChannel() }
         } message: {
-            Text("Environments using the old setup script stop reaching this Mac until you paste the new one.")
+            Text("Environments using the old setup script, and an installed Cowork plugin, stop reaching this Mac until you paste the new script and upload the new plugin.")
         }
     }
 
@@ -695,6 +695,12 @@ private struct CoworkPluginDetails: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: DS.Space.s) {
+            if model.coworkPluginOutdated {
+                Text("Your Cowork plugin is out of date (the channel or sharing changed). Get it again and upload it in place of the old one.")
+                    .font(DS.Typography.caption)
+                    .foregroundStyle(DS.Palette.gold)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             Text("Tasks that run on this Mac show up on their own. For Cowork tasks that run in the cloud, add Turbo's plugin to Cowork once.")
                 .font(DS.Typography.caption)
                 .foregroundStyle(DS.Palette.textSecondary)
