@@ -33,12 +33,15 @@ public struct ThreadItem: Equatable, Sendable, Identifiable {
     public var kind: Kind
     public var text: String?
     public var date: Date
+    /// Images that came with a prompt: file URLs on this Mac, or links for cloud sessions.
+    public var images: [URL]
 
-    public init(id: Int, kind: Kind, text: String?, date: Date) {
+    public init(id: Int, kind: Kind, text: String?, date: Date, images: [URL] = []) {
         self.id = id
         self.kind = kind
         self.text = text
         self.date = date
+        self.images = images
     }
 }
 
@@ -292,8 +295,19 @@ public final class SessionStore {
 
     private static let threadLimit = 80
 
+    /// A cloud prompt's images arrive when its turn ends: put them on that prompt.
+    static func attachImages(_ images: [URL], to s: inout AgentSession, at date: Date) {
+        if let index = s.thread.lastIndex(where: { $0.kind == .prompt }) {
+            if s.thread[index].images.isEmpty { s.thread[index].images = images }
+            return
+        }
+        let id = (s.thread.last?.id ?? 0) + 1
+        s.thread.append(ThreadItem(id: id, kind: .prompt, text: nil, date: date, images: images))
+    }
+
     /// Adds what just happened to the session's conversation.
     private func record(_ event: AgentEvent, in s: inout AgentSession, changes: [StoreChange]) {
+        if !event.promptImages.isEmpty { Self.attachImages(event.promptImages, to: &s, at: event.date) }
         var item: (ThreadItem.Kind, String?)?
         switch event.kind {
         case .promptSubmitted:

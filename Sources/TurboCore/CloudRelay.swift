@@ -64,18 +64,37 @@ public enum CloudRelay {
                         continue
                     c0 = (o.get("message") or {}).get("content")
                     if o.get("type") == "user" and not (isinstance(c0, list) and any(isinstance(b, dict) and b.get("type") == "tool_result" for b in c0)):
+                        # The prompt that started this turn: send along any images you pasted.
+                        imgs = []
+                        for b in (c0 if isinstance(c0, list) else []):
+                            src = b.get("source") if isinstance(b, dict) and b.get("type") == "image" else None
+                            if not isinstance(src, dict) or src.get("type") != "base64" or len(imgs) >= 3:
+                                continue
+                            try:
+                                import base64, urllib.request
+                                img = base64.b64decode(src.get("data") or "")
+                                if len(img) > 5000000:
+                                    continue
+                                ext = {"image/jpeg": "jpg", "image/gif": "gif", "image/webp": "webp"}.get(src.get("media_type"), "png")
+                                req = urllib.request.Request("TURBO_FILES_URL", data=img, method="PUT", headers={"Filename": "image-" + str(len(imgs) + 1) + "." + ext})
+                                link = (json.loads(urllib.request.urlopen(req, timeout=8).read().decode()).get("attachment") or {}).get("url")
+                                if link:
+                                    imgs.append(link)
+                            except Exception:
+                                pass
+                        if imgs:
+                            out["prompt_images"] = imgs
                         break
-                    if o.get("type") != "assistant":
+                    if o.get("type") != "assistant" or "reply" in out:
                         continue
                     c = (o.get("message") or {}).get("content")
                     t = c if isinstance(c, str) else chr(10).join(b.get("text", "") for b in (c or []) if isinstance(b, dict) and b.get("type") == "text")
                     if t.strip():
                         out["reply"] = t.strip()[:1500]
-                        break
             except Exception:
                 pass
 
-        """# : ""
+        """#.replacingOccurrences(of: "TURBO_FILES_URL", with: filesURL(channel: channel, server: server).absoluteString) : ""
         let stopURL = server.appendingPathComponent(stopChannel(channel)).appendingPathComponent("json").absoluteString + "?poll=1&since=10m"
         let publish = publishURL(channel: channel, server: server).absoluteString
         let sourceLine = source.map { "out[\"source\"] = \"\($0)\"\n" } ?? ""
@@ -311,7 +330,7 @@ public enum CloudRelay {
     /// What a saved plugin was built with. When this changes (new channel, sharing turned on or
     /// off), the installed plugin is out of date and needs uploading again.
     public static func coworkPluginSignature(channel: String, shareTitles: Bool) -> String {
-        "\(channel)|\(shareTitles ? "share" : "private")|v1"
+        "\(channel)|\(shareTitles ? "share" : "private")|v2"
     }
 
     public static func coworkPlugin(channel: String, server: URL = defaultServer, shareTitles: Bool = false) -> [String: String] {

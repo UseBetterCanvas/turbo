@@ -52,6 +52,8 @@ public struct AgentEvent: Equatable, Sendable {
     public var link: URL?
     /// What the user asked (local sessions only; cloud pings never include it).
     public var prompt: String?
+    /// Links to images you sent with the prompt (cloud sessions with sharing on).
+    public var promptImages: [URL] = []
     /// What the agent says it's doing right now, in its own words: a command's description
     /// ("Wait for Greptile review on PR #8") or the task it's working on.
     public var activityDetail: String?
@@ -428,6 +430,9 @@ public enum EventParser {
         if remote.hasPrefix("cse_") {
             event.link = URL(string: "https://claude.ai/code/session_" + remote.dropFirst(4))
         }
+        // Only https links: an image link never points Turbo at a file on the Mac.
+        event.promptImages = ((fields["prompt_images"] as? [String]) ?? []).prefix(4)
+            .compactMap(URL.init(string:)).filter { $0.scheme == "https" }
         return (id, event)
     }
 

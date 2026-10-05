@@ -308,6 +308,7 @@ final class AppModel: ObservableObject {
             // Sharing turned off: show nothing a not-yet-updated script or plugin still sends.
             if !self.preferences.cloudShareTitles {
                 event.prompt = nil
+                event.promptImages = []
                 if case .turnComplete = event.kind { event.kind = .turnComplete(summary: nil) }
             }
             self.handle(event)
@@ -918,6 +919,10 @@ final class AppModel: ObservableObject {
             }
         }
     }
+
+    /// Where images pasted into local prompts are saved so the chat can show them.
+    nonisolated static let transcriptImageDirectory = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+        .appendingPathComponent("Turbo/Images", isDirectory: true)
 
     /// Saves an image from the clipboard as a PNG Turbo can attach.
     func pastedImageFile() -> URL? {

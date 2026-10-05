@@ -115,7 +115,7 @@ struct ChatRow: View {
                     .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(Color.white.opacity(0.1)))
             }
             .buttonStyle(PressableStyle())
-            .help("Open in Turbo: the chat, reply and attachments")
+            .hoverTip("Chat in Turbo")
             primary
         }
     }
@@ -133,7 +133,7 @@ struct ChatRow: View {
                     .background(Capsule().fill(DS.Palette.gold))
             }
             .buttonStyle(PressableStyle())
-            .help("Allow this once. Open in Turbo for Deny and more.")
+            .hoverTip("Allow once")
         } else if model.canOpen(session) {
             Button {
                 model.open(session)
@@ -145,7 +145,7 @@ struct ChatRow: View {
                     .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(DS.Palette.brand))
             }
             .buttonStyle(PressableStyle())
-            .help(session.link != nil ? "Open the thread in its app" : "Go to its terminal")
+            .hoverTip(session.link != nil ? "Open in \(session.agent.displayName)" : "Go to Terminal")
         }
     }
 }
@@ -319,4 +319,48 @@ struct UpdateChip: View {
             return nil
         }
     }
+}
+
+/// A small label over a button after a short hover. Native tooltips don't show in the island's
+/// floating panel (it never becomes the active window), so Turbo draws its own.
+private struct HoverTip: ViewModifier {
+    let text: String
+    @State private var hovering = false
+    @State private var shown = false
+
+    func body(content: Content) -> some View {
+        content
+            .help(text)
+            .onHover { inside in
+                hovering = inside
+                if inside {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                        if hovering { withAnimation(DS.Motion.base) { shown = true } }
+                    }
+                } else {
+                    withAnimation(DS.Motion.base) { shown = false }
+                }
+            }
+            .overlay(alignment: .top) {
+                if shown {
+                    Text(text)
+                        .font(DSFont.sans(11, .semibold))
+                        .foregroundStyle(DS.Palette.textPrimary)
+                        .lineLimit(1)
+                        .fixedSize()
+                        .padding(.horizontal, 8)
+                        .frame(height: 22)
+                        .background(Capsule().fill(DS.Palette.overlay))
+                        .overlay(Capsule().strokeBorder(Color.white.opacity(0.1), lineWidth: 1))
+                        .offset(y: -28)
+                        .transition(.opacity)
+                        .allowsHitTesting(false)
+                }
+            }
+            .zIndex(shown ? 1 : 0)
+    }
+}
+
+extension View {
+    func hoverTip(_ text: String) -> some View { modifier(HoverTip(text: text)) }
 }
