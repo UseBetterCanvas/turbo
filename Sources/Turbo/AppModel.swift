@@ -868,6 +868,65 @@ final class AppModel: ObservableObject {
         }
     }
 
+    /// Sends a reply with attachments. Local sessions get the files' paths (Claude can open them);
+    /// cloud sessions get links, uploaded to your private channel first.
+    func send(_ raw: String, attachments: [URL], to session: AgentSession) {
+        guard !attachments.isEmpty else { send(raw, to: session); return }
+        let cloud = session.agent.isCloud || (session.agent == .cowork && session.logPath == nil)
+        if !cloud {
+            let note = CloudRelay.attachmentNote(local: attachments.map(\.path), links: [])
+            send(raw.isEmpty ? note : raw + "\n\n" + note, to: session)
+            return
+        }
+        composerNotes[session.id] = "Uploading \(attachments.count) file\(attachments.count == 1 ? "" : "s")…"
+        let target = CloudRelay.filesURL(channel: preferences.cloudChannel)
+        Task {
+            var links: [(name: String, url: String)] = []
+            for file in attachments {
+                guard let data = try? Data(contentsOf: file), data.count < 15_000_000 else { continue }
+                var request = URLRequest(url: target)
+                request.httpMethod = "PUT"
+                request.setValue(file.lastPathComponent, forHTTPHeaderField: "Filename")
+                request.httpBody = data
+                if let (body, response) = try? await URLSession.shared.data(for: request),
+                   (response as? HTTPURLResponse)?.statusCode == 200,
+                   let json = EventParser.jsonObject(body), let attachment = json["attachment"] as? [String: Any],
+                   let url = attachment["url"] as? String {
+                    links.append((file.lastPathComponent, url))
+                }
+            }
+            await MainActor.run {
+                guard links.count == attachments.count else {
+                    if !raw.isEmpty {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(raw, forType: .string)
+                    }
+                    self.composerNotes[session.id] = "Couldn't upload \(attachments.count - links.count) of your files (15 MB max each). Nothing was sent" + (raw.isEmpty ? "." : ", your message is copied.")
+                    return
+                }
+                let note = CloudRelay.attachmentNote(local: [], links: links)
+                self.send(raw.isEmpty ? note : raw + "\n\n" + note, to: session)
+            }
+        }
+    }
+
+    /// Saves an image from the clipboard as a PNG Turbo can attach.
+    func pastedImageFile() -> URL? {
+        guard let image = NSImage(pasteboard: NSPasteboard.general),
+              let tiff = image.tiffRepresentation, let rep = NSBitmapImageRep(data: tiff),
+              let png = rep.representation(using: .png, properties: [:]) else { return nil }
+        let dir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("Turbo/Attachments", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let url = dir.appendingPathComponent("Pasted image \(Date().formatted(.dateTime.hour().minute().second())).png".replacingOccurrences(of: ":", with: "."))
+        return (try? png.write(to: url)) != nil ? url : nil
+    }
+
+    /// Turns on Show Cloud Conversations and copies the updated setup script.
+    func turnOnCloudConversations() {
+        preferences.cloudShareTitles = true
+        copyCloudSetupScript()
+    }
+
     func send(_ raw: String, to session: AgentSession) {
         let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
@@ -1148,12 +1207,20 @@ final class AppModel: ObservableObject {
         openPopup(popupPage == .welcome ? .welcome : .home)
     }
 
-    func openPopup(_ page: PopupPage = .home) {
+    /// The session's chat in Turbo: the pop-up (or window) with that session picked.
+    func openInTurbo(_ session: AgentSession) {
+        markSeen(session)
+        openPopup(.home, select: session.id)
+    }
+
+    func openPopup(_ page: PopupPage = .home, select: String? = nil) {
         popupPage = page
         if page == .home {
             // Something waiting? Open on it. Otherwise keep the pick, or show the hello.
             let current = board
-            if let waiting = current.needsYou.first {
+            if let select {
+                selectedSessionID = select
+            } else if let waiting = current.needsYou.first {
                 selectedSessionID = waiting.id
             } else if !current.all.contains(where: { $0.id == selectedSessionID }) {
                 selectedSessionID = nil

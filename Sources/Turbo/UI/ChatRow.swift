@@ -102,7 +102,25 @@ struct ChatRow: View {
         }
     }
 
+    /// Two ways in, side by side: the chat in Turbo, and the thread itself (its app or page).
     @ViewBuilder private var action: some View {
+        HStack(spacing: 6) {
+            Button {
+                model.openInTurbo(session)
+            } label: {
+                Image(systemName: "bubble.left.and.bubble.right.fill")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(DS.Palette.textPrimary)
+                    .frame(width: 32, height: 32)
+                    .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(Color.white.opacity(0.1)))
+            }
+            .buttonStyle(PressableStyle())
+            .help("Open in Turbo: the chat, reply and attachments")
+            primary
+        }
+    }
+
+    @ViewBuilder private var primary: some View {
         if model.pendingApproval(for: session) != nil {
             Button {
                 model.decide(session, allow: true)
@@ -115,7 +133,7 @@ struct ChatRow: View {
                     .background(Capsule().fill(DS.Palette.gold))
             }
             .buttonStyle(PressableStyle())
-            .help("Allow this once. Hover for Deny and more.")
+            .help("Allow this once. Open in Turbo for Deny and more.")
         } else if model.canOpen(session) {
             Button {
                 model.open(session)
@@ -127,7 +145,7 @@ struct ChatRow: View {
                     .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(DS.Palette.brand))
             }
             .buttonStyle(PressableStyle())
-            .help(session.link != nil ? "Open the session" : "Go to its terminal")
+            .help(session.link != nil ? "Open the thread in its app" : "Go to its terminal")
         }
     }
 }

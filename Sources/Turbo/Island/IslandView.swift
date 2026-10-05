@@ -10,7 +10,7 @@ struct IslandView: View {
     var body: some View {
         let presentation = model.presentation
         let geometry = state.geometry
-        let size = IslandLayout.size(for: presentation, geometry: geometry, rows: model.sessions.count, detail: model.detailSessionID != nil, peek: model.peekText != nil)
+        let size = IslandLayout.size(for: presentation, geometry: geometry, rows: model.sessions.count, detail: false, peek: model.peekText != nil)
         // The tiny island swells a touch under the pointer, a beat before it opens.
         let lifted = (presentation == .compact || presentation == .idle) && model.pointerInside
 
@@ -466,24 +466,17 @@ private struct SessionList: View {
                         .frame(height: IslandLayout.rowHeight)
                         .staggered(0)
                     }
-                    // Scrolls past five sessions; resting on one opens its details below it.
+                    // Scrolls past five sessions.
                     ScrollView(.vertical, showsIndicators: sessions.count > IslandLayout.maxRows) {
                         VStack(spacing: 0) {
                             ForEach(Array(sessions.enumerated()), id: \.element.id) { index, session in
                                 IslandChatRow(session: session, now: context.date, divider: index > 0)
                                     .frame(height: IslandLayout.rowHeight)
-                                    .onHover { inside in hoverRow(session, inside) }
                                     .staggered(index)
-                                if model.detailSessionID == session.id {
-                                    SessionDetail(session: session)
-                                        .frame(height: IslandLayout.detailHeight)
-                                        .transition(.opacity)
-                                }
                             }
                         }
                     }
-                    .frame(height: CGFloat(min(max(sessions.count, sessions.isEmpty ? 0 : 1), IslandLayout.maxRows)) * IslandLayout.rowHeight
-                        + (model.detailSessionID != nil ? IslandLayout.detailHeight : 0))
+                    .frame(height: CGFloat(min(max(sessions.count, sessions.isEmpty ? 0 : 1), IslandLayout.maxRows)) * IslandLayout.rowHeight)
                 }
             }
 
@@ -587,9 +580,10 @@ private struct IslandChatRow: View {
             }
             .contentShape(Rectangle())
             .onHover { hovering = $0 }
-            .onTapGesture { model.open(session) }
+            .onTapGesture { model.openInTurbo(session) }
             .contextMenu {
-                if model.canOpen(session) { Button("Open") { model.open(session) } }
+                Button("Open in Turbo") { model.openInTurbo(session) }
+                if model.canOpen(session) { Button("Open in App") { model.open(session) } }
                 if model.pendingApproval(for: session) != nil {
                     Button("Allow") { model.decide(session, allow: true) }
                     Button("Deny") { model.decide(session, allow: false) }
