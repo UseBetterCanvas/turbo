@@ -51,9 +51,18 @@ public enum HookInstaller {
     }
 
     public static func isClaudeStopInstalled(_ settings: Data?) -> Bool {
+        gateInstalled(for: "PreToolUse", in: settings)
+    }
+
+    /// The Stop hook asks Turbo for a queued reply before Claude stops.
+    public static func isClaudeReplyInstalled(_ settings: Data?) -> Bool {
+        gateInstalled(for: "Stop", in: settings)
+    }
+
+    static func gateInstalled(for event: String, in settings: Data?) -> Bool {
         guard let settings, let root = EventParser.jsonObject(settings),
               let hooks = root["hooks"] as? [String: Any],
-              let groups = hooks["PreToolUse"] as? [[String: Any]] else { return false }
+              let groups = hooks[event] as? [[String: Any]] else { return false }
         return groups.contains { group in commands(in: group).contains { ($0["command"] as? String)?.contains(gatePath) == true } }
     }
 
@@ -76,7 +85,8 @@ public enum HookInstaller {
         var hooks = try existingHooks(root)
         for event in claudeEvents {
             var groups = (hooks[event] as? [[String: Any]] ?? []).filter { !isOurs($0) }
-            let command = event == "PreToolUse" ? claudeGateCommand(port: port) : claudeCommand(port: port)
+            // Before a step (Stop) and at the end of a turn (replies), Claude asks Turbo first.
+            let command = event == "PreToolUse" || event == "Stop" ? claudeGateCommand(port: port) : claudeCommand(port: port)
             var group: [String: Any] = ["hooks": [["type": "command", "command": command]]]
             if claudeToolEvents.contains(event) { group["matcher"] = "*" }
             groups.append(group)

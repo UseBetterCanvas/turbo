@@ -57,6 +57,12 @@ public struct AgentEvent: Equatable, Sendable {
     public var activityDetail: String?
     /// The session log a local agent is writing (Codex rollouts).
     public var logPath: String?
+    /// A test run just passed (true) or failed (false).
+    public var testsPassed: Bool?
+    /// What the turn changed (sent by the cloud script when a turn ends).
+    public var changes: ChangeSummary?
+    /// The turn didn't end: a reply sent from Turbo kept it going.
+    public var continuedByReply = false
     public var date: Date
 
     public init(
@@ -83,6 +89,14 @@ public struct AgentEvent: Equatable, Sendable {
         self.date = date
     }
 
+    func with(testsPassed: Bool?, changes: ChangeSummary?, continued: Bool = false) -> AgentEvent {
+        var copy = self
+        copy.testsPassed = testsPassed
+        copy.changes = changes
+        copy.continuedByReply = continued
+        return copy
+    }
+
     func with(logPath: String?) -> AgentEvent {
         var copy = self
         copy.logPath = logPath
@@ -103,6 +117,7 @@ public enum EventParser {
         guard let obj = jsonObject(data), let name = obj["hook_event_name"] as? String else { return nil }
 
         let kind: AgentEventKind
+        var continued = false
         switch name {
         case "SessionStart":
             kind = .sessionStarted
@@ -120,7 +135,13 @@ public enum EventParser {
             }
             kind = .needsInput(message: message)
         case "Stop":
-            kind = .turnComplete(summary: (obj["last_assistant_message"] as? String) ?? (obj["reply"] as? String))
+            // A reply from Turbo kept it going: the turn isn't over, it has a new instruction.
+            if obj["continued"] as? Bool == true {
+                kind = .promptSubmitted
+                continued = true
+            } else {
+                kind = .turnComplete(summary: (obj["last_assistant_message"] as? String) ?? (obj["reply"] as? String))
+            }
         case "SessionEnd":
             kind = .sessionEnded
         default:
@@ -136,6 +157,26 @@ public enum EventParser {
             prompt: obj["prompt"] as? String,
             date: now
         ).with(activityDetail: activityDetail(from: obj))
+            .with(testsPassed: testsPassed(from: obj), changes: (obj["changes"] as? [String: Any]).flatMap(ChangeSummary.init(json:)), continued: continued)
+    }
+
+    /// From a PostToolUse hook for a shell command: whether it was a test run, and how it went.
+    /// Cloud pings carry the verdict as `tests`.
+    static func testsPassed(from obj: [String: Any]) -> Bool? {
+        if let verdict = obj["tests"] as? String { return verdict == "pass" }
+        guard obj["hook_event_name"] as? String == "PostToolUse",
+              let input = obj["tool_input"] as? [String: Any], let command = input["command"] as? String else { return nil }
+        let response = obj["tool_response"]
+        var output = ""
+        var exit: Int?
+        if let r = response as? [String: Any] {
+            output = [r["stdout"], r["stderr"], r["output"]].compactMap { $0 as? String }.joined(separator: "\n")
+            exit = (r["exit_code"] as? Int) ?? (r["exitCode"] as? Int)
+            if r["interrupted"] as? Bool == true { return nil }
+        } else if let s = response as? String {
+            output = s
+        }
+        return TestSignal.passed(command: command, output: output, exitCode: exit)
     }
 
     /// The agent's own one-line description of what it's doing. Claude Code writes one for each
@@ -199,6 +240,13 @@ public enum EventParser {
     public static let permissionStop = #"{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"deny","message":"Stopped from Turbo","interrupt":true}}}"#
 
     /// The JSON a PermissionRequest hook prints to allow or deny.
+    /// Denies with your note, which Claude reads as what to do instead.
+    public static func permissionDeny(message: String) -> String {
+        let object: [String: Any] = ["hookSpecificOutput": ["hookEventName": "PermissionRequest", "decision": ["behavior": "deny", "message": message]]]
+        let data = (try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])) ?? Data()
+        return String(decoding: data, as: UTF8.self)
+    }
+
     public static func permissionDecision(allow: Bool) -> String {
         allow
             ? #"{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow"}}}"#

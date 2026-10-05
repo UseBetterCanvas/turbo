@@ -27,6 +27,8 @@ extension AgentSession {
             parts.append(silent >= 300 ? "No activity for \(Format.duration(silent))" : (activityDetail ?? activity))
         case .done:
             if let place { parts.append(place) }
+            if testsPassed == false { parts.append("Tests failing") }
+            if let changes { parts.append("+\(changes.additions) −\(changes.deletions)") }
             if let summary = Format.snippet(summary, limit: 120) {
                 parts.append(summary)
             } else if let duration = cookDuration {

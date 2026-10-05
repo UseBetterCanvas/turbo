@@ -68,6 +68,10 @@ public struct AgentSession: Identifiable, Equatable, Sendable {
     public var thread: [ThreadItem] = []
     /// The agent's own words for what it's doing right now, when it gives them.
     public var activityDetail: String?
+    /// The latest test run this turn: passed, failed, or none seen.
+    public var testsPassed: Bool?
+    /// What this turn changed in the repo, when Turbo could tell.
+    public var changes: ChangeSummary?
     /// When it started waiting on you. Nil unless it's waiting.
     public var needsInputSince: Date?
     /// A short name from the first thing this session was asked. Kept across turns.
@@ -229,6 +233,8 @@ public final class SessionStore {
         if case .needsInput = s.phase {} else { s.needsInputSince = nil }
         // After any turn start above, which clears it.
         if case .activity = event.kind, let detail = event.activityDetail { s.activityDetail = detail }
+        if let tests = event.testsPassed { s.testsPassed = tests }
+        if let changes = event.changes { s.changes = changes }
         record(event, in: &s, changes: changes)
         sessions[key] = s
         return changes
@@ -259,6 +265,20 @@ public final class SessionStore {
         guard var s = sessions[id], case .done(nil) = s.phase else { return }
         s.phase = .done(summary: summary)
         Self.attachLateReply(summary, to: &s, at: Date())
+        sessions[id] = s
+    }
+
+    /// Adds a line to a session's conversation from outside an event (a note you sent).
+    public func appendThread(_ kind: ThreadItem.Kind, _ text: String?, to id: String, at date: Date = Date()) {
+        guard var s = sessions[id] else { return }
+        append(kind, text, to: &s, at: date)
+        sessions[id] = s
+    }
+
+    /// What a turn changed, worked out after it ended (local sessions read git).
+    public func setChanges(_ changes: ChangeSummary, for id: String) {
+        guard var s = sessions[id] else { return }
+        s.changes = changes
         sessions[id] = s
     }
 
@@ -326,6 +346,8 @@ public final class SessionStore {
         s.recentSteps = []
         s.lastPrompt = nil
         s.activityDetail = nil
+        s.testsPassed = nil
+        s.changes = nil
     }
 
     private func resolveKey(for event: AgentEvent) -> String {

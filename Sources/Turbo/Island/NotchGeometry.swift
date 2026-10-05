@@ -89,9 +89,11 @@ enum IslandLayout {
         case .hidden:
             return geometry.docked && geometry.hasNotch ? CGSize(width: notch.width + flare, height: notch.height) : CGSize(width: notch.width, height: 0)
         case .idle:
-            return geometry.docked
+            let base = geometry.docked
                 ? CGSize(width: notch.width + 2 * idleSideWidth + flare, height: notch.height)
                 : floatingIdleSize
+            guard peek else { return base }
+            return CGSize(width: max(base.width, peekMinWidth + flare), height: base.height + peekHeight)
         case .compact:
             let base = geometry.docked
                 ? CGSize(width: notch.width + 2 * compactSideWidth + flare, height: notch.height)

@@ -58,6 +58,7 @@ final class StatusItemController: NSObject {
         let count = waiting > 0 ? waiting : cooking
         button.title = count > 0 ? " \(count)" : ""
         button.toolTip = (waiting > 0 ? "\(waiting) need you" : cooking > 0 ? "\(cooking) cooking" : "Turbo")
+            + (model.usage.map { " · Session \($0.fiveHour)%" + ($0.week.map { ", week \($0)%" } ?? "") } ?? "")
             + (model.isQuiet ? " · Quiet" : "") + (model.hotKeyAvailable ? " · ⌃⌥Space" : "")
     }
 

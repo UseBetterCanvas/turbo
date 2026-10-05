@@ -136,3 +136,100 @@ public final class StopRequests: @unchecked Sendable {
     }
 }
 
+/// Messages you've typed for a session, waiting for it to finish its turn. When Claude Code's
+/// Stop hook asks the gate, the oldest one is handed over and Claude carries on with it.
+public final class ReplyQueue: @unchecked Sendable {
+    private let lock = NSLock()
+    private var queued: [String: [String]] = [:]
+
+    public init() {}
+
+    public func enqueue(_ text: String, for sessionID: String) {
+        lock.lock(); defer { lock.unlock() }
+        queued[sessionID, default: []].append(text)
+    }
+
+    /// Hands over the next reply, once.
+    public func take(_ sessionID: String) -> String? {
+        lock.lock(); defer { lock.unlock() }
+        guard var list = queued[sessionID], !list.isEmpty else { return nil }
+        let first = list.removeFirst()
+        queued[sessionID] = list.isEmpty ? nil : list
+        return first
+    }
+
+    public func pending(_ sessionID: String) -> [String] {
+        lock.lock(); defer { lock.unlock() }
+        return queued[sessionID] ?? []
+    }
+
+    public func clear(_ sessionID: String) {
+        lock.lock(); defer { lock.unlock() }
+        queued[sessionID] = nil
+    }
+
+    /// What the Stop hook prints to keep Claude going with your message.
+    public static func continueResponse(_ text: String) -> String {
+        let object: [String: Any] = ["decision": "block", "reason": text]
+        let data = (try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])) ?? Data()
+        return String(decoding: data, as: UTF8.self)
+    }
+}
+
+/// Whether a command was a test run, and whether it passed, judged from its output. Used to
+/// say "tests passing" or "tests failing" on a finished session.
+public enum TestSignal {
+    static let runners = [
+        "npm test", "npm run test", "pnpm test", "pnpm run test", "yarn test", "bun test", "npx jest", "jest",
+        "vitest", "pytest", "python -m pytest", "go test", "cargo test", "swift test", "xcodebuild test",
+        "rspec", "bundle exec rspec", "rails test", "mix test", "phpunit", "gradle test", "./gradlew test",
+        "mvn test", "dotnet test", "make test", "deno test", "playwright test",
+    ]
+
+    /// nil when the command isn't a test run.
+    public static func passed(command: String, output: String, exitCode: Int? = nil) -> Bool? {
+        let c = command.lowercased()
+        guard runners.contains(where: { c.contains($0) }) else { return nil }
+        if let exitCode { return exitCode == 0 }
+        let o = output.lowercased()
+        let failed = [" failed", "failures:", "✗", "✕", "error:", "tests failed", "failing", "fail "].contains { o.contains($0) }
+            && !o.contains("0 failed") && !o.contains("0 failures") && !o.contains("failed: 0")
+        return !failed
+    }
+}
+
+/// What a turn changed in the repo: counts, and (when sharing is on, or for local sessions) the files.
+public struct ChangeSummary: Equatable, Sendable {
+    public var files: Int
+    public var additions: Int
+    public var deletions: Int
+    public var paths: [String]
+
+    public init(files: Int, additions: Int, deletions: Int, paths: [String] = []) {
+        self.files = files
+        self.additions = additions
+        self.deletions = deletions
+        self.paths = paths
+    }
+
+    /// From `git diff --numstat` output.
+    public static func parse(numstat: String) -> ChangeSummary {
+        var files = 0, add = 0, del = 0
+        var paths: [String] = []
+        for line in numstat.split(whereSeparator: \.isNewline) {
+            let parts = line.split(separator: "\t", maxSplits: 2)
+            guard parts.count == 3 else { continue }
+            files += 1
+            add += Int(parts[0]) ?? 0
+            del += Int(parts[1]) ?? 0
+            paths.append(String(parts[2]))
+        }
+        return ChangeSummary(files: files, additions: add, deletions: del, paths: paths)
+    }
+
+    init?(json: [String: Any]) {
+        guard let files = json["files"] as? Int else { return nil }
+        self.init(files: files, additions: json["add"] as? Int ?? 0, deletions: json["del"] as? Int ?? 0, paths: json["paths"] as? [String] ?? [])
+    }
+}
+

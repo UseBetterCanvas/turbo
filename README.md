@@ -60,6 +60,15 @@ Turbo lives in the notch, like the iPhone's Dynamic Island, and is always exactl
 - Claude Code in the cloud stops within a few seconds of its next step. This needs the latest setup script; Settings tells you when yours is out of date.
 - Cowork and Codex cloud can't be reached from outside, so Stop opens them instead.
 
+**Reply from Turbo:** type in a session's reply box and press Return.
+- While Claude works, your reply is queued and Claude carries on with it the moment its turn ends, no terminal needed. This works for Claude Code on your Mac and in the cloud, and for cloud Cowork tasks through the plugin.
+- On a permission prompt, typing denies it and tells Claude what to do instead.
+- Anywhere else (Codex, or a session that's already finished), Turbo copies your message and opens the session so you can paste it.
+
+**What changed:** finished sessions show `4 files · +120 −35` and **Tests passing** or **Tests failing** from the last test run. Local sessions read git; cloud sessions report it from the script.
+
+**Usage limits:** your Claude **5-hour session limit** and **weekly limit**, read from the Claude app on your Mac. They show beside the notch and in the sidebar, with a heads-up at 80% and 95%.
+
 **Live steps:** rows show Claude's own words for what it's doing ("Waiting for Greptile review on PR #8"). The tiny island briefly grows to show each new step of the session it tracks.
 
 **Updates:** Turbo checks every hour and installs new versions by itself when nothing's cooking. You can turn this off in Settings → General.
