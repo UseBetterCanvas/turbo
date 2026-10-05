@@ -909,6 +909,8 @@ struct UsageMeter: View {
             }
         }
         .font(DSFont.sans(11.5, .semibold).monospacedDigit())
+        .lineLimit(1)
+        .fixedSize()
         .contentShape(Rectangle())
         .onHover { inside in
             hovering = inside
@@ -1023,7 +1025,7 @@ struct UsageDetails: View {
     /// "Resets in about 3 hr 26 min", or the day and time when it's further off.
     private func resetText(_ date: Date, now: Date) -> String {
         let left = date.timeIntervalSince(now)
-        guard left > 0 else { return "Resetting soon" }
+        guard left > 0 else { return "" }
         if left < 86_400 {
             let h = Int(left) / 3600, m = (Int(left) % 3600) / 60
             return "Resets in about " + (h > 0 ? "\(h) hr \(m) min" : "\(m) min")

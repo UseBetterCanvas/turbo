@@ -32,7 +32,8 @@ public struct PlanUsage: Equatable, Sendable {
     static func windowStart(_ points: [(Date, Int)]) -> Date? {
         guard points.count > 1 else { return nil }
         var startIndex: Int?
-        for i in 1..<points.count where points[i].1 < points[i - 1].1 {
+        // A reset drops usage to (nearly) nothing or by a big step; a point or two of drift isn't one.
+        for i in 1..<points.count where points[i].1 < points[i - 1].1 && (points[i].1 <= 2 || points[i - 1].1 - points[i].1 >= 20) {
             startIndex = i
         }
         guard let startIndex else { return nil }
@@ -46,25 +47,28 @@ public struct PlanUsage: Equatable, Sendable {
     }
 
     /// The newest sample, or nil if the file isn't there or has nothing usable.
-    public static func latest(in data: Data) -> PlanUsage? {
+    public static func latest(in data: Data, now: Date = Date()) -> PlanUsage? {
         guard let root = EventParser.jsonObject(data), let samples = root["samples"] as? [[String: Any]] else { return nil }
-        let parsed: [PlanUsage] = samples.compactMap { sample in
+        let all: [(org: String, usage: PlanUsage)] = samples.compactMap { sample in
             guard let u = sample["u"] as? [String: Any], let fh = number(u["fh"]) else { return nil }
             let ms = number(sample["t"]) ?? 0
-            return PlanUsage(fiveHour: fh, week: number(u["sd"]), recordedAt: Date(timeIntervalSince1970: Double(ms) / 1000))
-        }.sorted { $0.recordedAt < $1.recordedAt }
+            return (sample["org"] as? String ?? "", PlanUsage(fiveHour: fh, week: number(u["sd"]), recordedAt: Date(timeIntervalSince1970: Double(ms) / 1000)))
+        }.sorted { $0.usage.recordedAt < $1.usage.recordedAt }
+        // Only the organization you're using now: another org's lower numbers aren't a reset.
+        guard let org = all.last?.org else { return nil }
+        let parsed = all.filter { $0.org == org }.map(\.usage)
         guard var latest = parsed.last else { return nil }
 
         let session = parsed.map { ($0.recordedAt, $0.fiveHour) }
         if let start = windowStart(session) {
             let reset = start.addingTimeInterval(sessionWindow)
-            if reset > latest.recordedAt { latest.sessionResetsAt = reset }
+            if reset > now { latest.sessionResetsAt = reset }
             latest.sessionTrend = parsed.filter { $0.recordedAt >= start }.map(\.fiveHour)
         }
         let week = parsed.compactMap { p in p.week.map { (p.recordedAt, $0) } }
         if let start = windowStart(week) {
             let reset = start.addingTimeInterval(weekWindow)
-            if reset > latest.recordedAt { latest.weekResetsAt = reset }
+            if reset > now { latest.weekResetsAt = reset }
         }
         return latest
     }

@@ -1081,12 +1081,34 @@ final class PlanUsageResetTests: XCTestCase {
         // An old window ends (40 → 0), then new use starts at minute 300.
         let samples = [sample(0, 30, 5), sample(60, 40, 6), sample(290, 0, 6), sample(300, 2, 7), sample(360, 10, 8)]
         let json = #"{"version":2,"samples":["# + samples.joined(separator: ",") + "]}"
-        let usage = try XCTUnwrap(PlanUsage.latest(in: Data(json.utf8)))
         let start = Date(timeIntervalSince1970: Double(base) / 1000 + 300 * 60)
+        let usage = try XCTUnwrap(PlanUsage.latest(in: Data(json.utf8), now: start.addingTimeInterval(3600)))
         XCTAssertEqual(usage.fiveHour, 10)
         XCTAssertEqual(usage.sessionResetsAt, start.addingTimeInterval(5 * 3600))
         XCTAssertEqual(usage.sessionTrend, [2, 10])
         // The week never fell in this history, so there's no honest estimate for it.
         XCTAssertNil(usage.weekResetsAt)
+    }
+}
+
+final class PlanUsageEdgeTests: XCTestCase {
+    func testDriftOtherOrgsAndExpiredEstimates() throws {
+        let base = 1_791_000_000_000
+        func sample(_ minutes: Int, _ fh: Int, org: String = "a") -> String {
+            #"{"t":"# + "\(base + minutes * 60_000)" + #","org":""# + org + #"","u":{"fh":"# + "\(fh)" + "}}"
+        }
+        let start = Date(timeIntervalSince1970: Double(base) / 1000)
+        // 40 → 39 is drift, not a reset.
+        let drift = #"{"samples":["# + [sample(0, 40), sample(10, 39), sample(20, 45)].joined(separator: ",") + "]}"
+        XCTAssertNil(try XCTUnwrap(PlanUsage.latest(in: Data(drift.utf8), now: start)).sessionResetsAt)
+        // Another org's lower number isn't a reset; only org "b" (the latest) counts.
+        let orgs = #"{"samples":["# + [sample(0, 60, org: "a"), sample(10, 5, org: "b"), sample(20, 8, org: "b")].joined(separator: ",") + "]}"
+        let usage = try XCTUnwrap(PlanUsage.latest(in: Data(orgs.utf8), now: start))
+        XCTAssertEqual(usage.fiveHour, 8)
+        XCTAssertNil(usage.sessionResetsAt)
+        // A reset estimate that's already passed isn't shown.
+        let reset = #"{"samples":["# + [sample(0, 50), sample(10, 0), sample(20, 3)].joined(separator: ",") + "]}"
+        XCTAssertNotNil(try XCTUnwrap(PlanUsage.latest(in: Data(reset.utf8), now: start.addingTimeInterval(3600))).sessionResetsAt)
+        XCTAssertNil(try XCTUnwrap(PlanUsage.latest(in: Data(reset.utf8), now: start.addingTimeInterval(6 * 3600))).sessionResetsAt)
     }
 }
