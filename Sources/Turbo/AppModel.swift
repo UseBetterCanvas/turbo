@@ -301,6 +301,10 @@ final class AppModel: ObservableObject {
                 let list = self.queuedReplies[key] ?? []
                 // Match the exact reply the script picked up; fall back to the oldest.
                 if let reply = list.first(where: { $0.id == event.continuedReplyID }) ?? list.first {
+                    // The turn that just ended keeps its images before your reply starts the next one.
+                    if self.preferences.cloudShareTitles {
+                        self.store.attachImages(event.promptImages, toSession: key, at: event.date)
+                    }
                     self.replyDelivered(agent: event.agent, sessionID: event.sessionID ?? "", replyID: reply.id, text: reply.text)
                     return
                 }
@@ -308,6 +312,7 @@ final class AppModel: ObservableObject {
             // Sharing turned off: show nothing a not-yet-updated script or plugin still sends.
             if !self.preferences.cloudShareTitles {
                 event.prompt = nil
+                event.promptImages = []
                 if case .turnComplete = event.kind { event.kind = .turnComplete(summary: nil) }
             }
             self.handle(event)
@@ -744,6 +749,8 @@ final class AppModel: ObservableObject {
         }
         seen.remove(session.id)
         nudged.remove(session.id)
+        // A held permission prompt goes back to the terminal instead of waiting on a row that's gone.
+        releaseApprovals(for: session.id)
         store.remove(id: session.id)
         sessions = store.sorted
         dropSpotlights(for: session.id)
@@ -918,6 +925,10 @@ final class AppModel: ObservableObject {
             }
         }
     }
+
+    /// Where images pasted into local prompts are saved so the chat can show them.
+    nonisolated static let transcriptImageDirectory = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+        .appendingPathComponent("Turbo/Images", isDirectory: true)
 
     /// Saves an image from the clipboard as a PNG Turbo can attach.
     func pastedImageFile() -> URL? {
@@ -1195,6 +1206,13 @@ final class AppModel: ObservableObject {
     func clearFinished() {
         for session in sessions where !session.phase.isActive { store.remove(id: session.id) }
         sessions = store.sorted
+        if !sessions.contains(where: { $0.id == selectedSessionID }) { selectedSessionID = board.all.first?.id }
+    }
+
+    /// Empties the list. A session that's still running comes back when it does something new.
+    func clearAll() {
+        for session in sessions { dismiss(session) }
+        selectedSessionID = nil
     }
 
     func playSound(named name: String) {

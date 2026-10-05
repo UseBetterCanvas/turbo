@@ -239,7 +239,7 @@ private struct CloudSetupSteps: View {
             HStack(alignment: .center, spacing: DS.Space.m) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Show Cloud Conversations").font(DS.Typography.bodyStrong).foregroundStyle(DS.Palette.textPrimary)
-                    Text("Send your prompts and Claude's final replies too, so cloud sessions read like a chat and get real names. Copy the script again after changing this.")
+                    Text("Send your prompts, any images you paste in them and Claude's final replies too, so cloud sessions read like a chat and get real names. Images go to your private channel and expire after a few hours. Copy the script again after changing this.")
                         .font(DS.Typography.caption)
                         .foregroundStyle(DS.Palette.textSecondary)
                         .fixedSize(horizontal: false, vertical: true)

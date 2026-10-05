@@ -556,7 +556,7 @@ final class ActivityDetailTests: XCTestCase {
     }
 
     func testRelayActivityAndTitle() throws {
-        let inner = #"{"hook_event_name":"UserPromptSubmit","session_id":"s","cwd":"Clippy","prompt":"Build the note style picker","activity":"Reading files"}"#
+        let inner = #"{"hook_event_name":"UserPromptSubmit","session_id":"s","cwd":"turbo","prompt":"Build the note style picker","activity":"Reading files"}"#
         let envelope = try JSONSerialization.data(withJSONObject: ["event": "message", "id": "1", "message": inner])
         let event = try XCTUnwrap(EventParser.parseRelayLine(envelope)?.event)
         XCTAssertEqual(event.prompt, "Build the note style picker")
@@ -588,12 +588,12 @@ final class ActivityDetailTests: XCTestCase {
             process.standardInput = input
             process.standardOutput = output
             try process.run()
-            input.fileHandleForWriting.write(Data(#"{"hook_event_name":"UserPromptSubmit","session_id":"s","cwd":"/w/Clippy","prompt":"please fix the flaky syrup tests now ok","tool_input":{"description":"Run tests"}}"#.utf8))
+            input.fileHandleForWriting.write(Data(#"{"hook_event_name":"UserPromptSubmit","session_id":"s","cwd":"/w/turbo","prompt":"please fix the flaky syrup tests now ok","tool_input":{"description":"Run tests"}}"#.utf8))
             try input.fileHandleForWriting.close()
             process.waitUntilExit()
             let firstLine = String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self).split(separator: "\n").first ?? ""
             let out = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(firstLine.utf8)) as? [String: Any])
-            XCTAssertEqual(out["cwd"] as? String, "Clippy")
+            XCTAssertEqual(out["cwd"] as? String, "turbo")
             XCTAssertEqual(out["activity"] as? String, "Run tests")
             XCTAssertEqual(out["prompt"] as? String, share ? "please fix the flaky syrup tests now ok" : nil)
         }
@@ -1120,5 +1120,85 @@ final class PlanUsageEdgeTests: XCTestCase {
         XCTAssertTrue(cloud.contains("curl -L"))
         XCTAssertTrue(cloud.contains("a.png: https://ntfy.sh/file/x.png"))
         XCTAssertEqual(CloudRelay.attachmentNote(local: [], links: []), "")
+    }
+
+    func testMarkdownBlocks() {
+        let md = """
+        I sent a **test**.
+
+        **To make chat work:**
+        1. Paste this script into
+           your setup script.
+        2. Start a new session.
+
+        - one
+          - nested
+        ## Heading
+        > quoted
+        ```
+        let x = 1
+        ```
+        """
+        XCTAssertEqual(MarkdownBlock.parse(md), [
+            .paragraph("I sent a **test**."),
+            .paragraph("**To make chat work:**"),
+            .listItem(marker: "1.", text: "Paste this script into your setup script.", depth: 0),
+            .listItem(marker: "2.", text: "Start a new session.", depth: 0),
+            .listItem(marker: "•", text: "one", depth: 0),
+            .listItem(marker: "•", text: "nested", depth: 1),
+            .heading(level: 2, text: "Heading"),
+            .quote("quoted"),
+            .code("let x = 1"),
+        ])
+        XCTAssertEqual(MarkdownBlock.parse("plain text"), [.paragraph("plain text")])
+        XCTAssertEqual(MarkdownBlock.parse("#hashtag"), [.paragraph("#hashtag")])
+        XCTAssertEqual(MarkdownBlock.parse("Run this:\n\n    swift build\n      --verbose\n\nDone."),
+                       [.paragraph("Run this:"), .code("swift build\n  --verbose"), .paragraph("Done.")])
+    }
+
+    func testPromptImages() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("turbo-img-\(UUID().uuidString)")
+        let png = Data([0x89, 0x50, 0x4E, 0x47]).base64EncodedString()
+        let line = #"{"type":"user","uuid":"u1","timestamp":"2026-10-05T04:00:00.000Z","message":{"role":"user","content":[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"\#(png)"}},{"type":"text","text":"what is this"}]}}"#
+        let items = ClaudeTranscript.thread(inJSONL: Data(line.utf8), imageDirectory: dir)
+        XCTAssertEqual(items.count, 1)
+        XCTAssertEqual(items[0].text, "what is this")
+        let url = try XCTUnwrap(items[0].images.first)
+        XCTAssertEqual(try Data(contentsOf: url), Data([0x89, 0x50, 0x4E, 0x47]))
+        // An image on its own is still a prompt; without a directory images are skipped.
+        let only = #"{"type":"user","uuid":"u2","message":{"role":"user","content":[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"\#(png)"}}]}}"#
+        XCTAssertEqual(ClaudeTranscript.thread(inJSONL: Data(only.utf8), imageDirectory: dir).first?.images, [url])
+        XCTAssertTrue(ClaudeTranscript.thread(inJSONL: Data(only.utf8)).isEmpty)
+
+        // Cloud: links ride on the Stop event and land on the turn's prompt. Only https.
+        let inner = #"{"hook_event_name":"Stop","session_id":"s","cwd":"turbo","prompt_images":["https://ntfy.sh/file/a.png","file:///etc/passwd"]}"#
+        let envelope = try JSONSerialization.data(withJSONObject: ["id": "m1", "event": "message", "time": 1, "message": inner])
+        let event = try XCTUnwrap(EventParser.parseRelayLine(envelope)?.event)
+        XCTAssertEqual(event.promptImages, [URL(string: "https://ntfy.sh/file/a.png")!])
+        var session = AgentSession(agent: .cloud, sessionID: "s", cwd: "turbo", lastActivityAt: Date())
+        session.thread = [ThreadItem(id: 1, kind: .prompt, text: "look", date: Date())]
+        SessionStore.attachImages(event.promptImages, to: &session, at: Date())
+        XCTAssertEqual(session.thread[0].images, event.promptImages)
+        // A later turn with no text gets its own image prompt instead of the old one's.
+        session.thread.append(ThreadItem(id: 2, kind: .finished(failed: false), text: nil, date: Date()))
+        let later = [URL(string: "https://ntfy.sh/file/b.png")!]
+        SessionStore.attachImages(later, to: &session, at: Date())
+        XCTAssertEqual(session.thread.last?.kind, .prompt)
+        XCTAssertEqual(session.thread.last?.images, later)
+        XCTAssertEqual(session.thread[0].images, event.promptImages)
+
+        // A big image record before the read window is still read whole.
+        let big = Data(repeating: 0x41, count: 300_000).base64EncodedString()
+        let record = #"{"type":"user","uuid":"u9","message":{"role":"user","content":[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"\#(big)"}},{"type":"text","text":"big one"}]}}"#
+        let file = dir.appendingPathComponent("t.jsonl")
+        try Data((record + "\n").utf8).write(to: file)
+        let read = ClaudeTranscript.thread(atPath: file.path, tailBytes: 1000, imageDirectory: dir)
+        XCTAssertEqual(read.first?.text, "big one")
+        XCTAssertEqual(read.first?.images.count, 1)
+
+        let script = CloudRelay.relayScript(channel: "turbo-x", shareTitles: true)
+        XCTAssertTrue(script.contains("https://ntfy.sh/turbo-x-files"))
+        XCTAssertFalse(script.contains("TURBO_FILES_URL"))
+        XCTAssertFalse(CloudRelay.relayScript(channel: "turbo-x").contains("prompt_images"))
     }
 }

@@ -33,12 +33,15 @@ public struct ThreadItem: Equatable, Sendable, Identifiable {
     public var kind: Kind
     public var text: String?
     public var date: Date
+    /// Images that came with a prompt: file URLs on this Mac, or links for cloud sessions.
+    public var images: [URL]
 
-    public init(id: Int, kind: Kind, text: String?, date: Date) {
+    public init(id: Int, kind: Kind, text: String?, date: Date, images: [URL] = []) {
         self.id = id
         self.kind = kind
         self.text = text
         self.date = date
+        self.images = images
     }
 }
 
@@ -286,14 +289,34 @@ public final class SessionStore {
         sessions[id] = nil
     }
 
+    /// Images for a turn whose Stop event is otherwise consumed (a queued reply carried it on).
+    public func attachImages(_ images: [URL], toSession id: String, at date: Date) {
+        guard var s = sessions[id], !images.isEmpty else { return }
+        Self.attachImages(images, to: &s, at: date)
+        sessions[id] = s
+    }
+
     public func removeAll() {
         sessions.removeAll()
     }
 
     private static let threadLimit = 80
 
+    /// A cloud prompt's images arrive when its turn ends: put them on this turn's prompt, or on a
+    /// new image-only prompt when the turn had no text (an earlier turn's prompt never gets them).
+    static func attachImages(_ images: [URL], to s: inout AgentSession, at date: Date) {
+        let turnStart = (s.thread.lastIndex { if case .finished = $0.kind { return true } else { return false } } ?? -1) + 1
+        if let index = s.thread.lastIndex(where: { $0.kind == .prompt }), index >= turnStart {
+            if s.thread[index].images.isEmpty { s.thread[index].images = images }
+            return
+        }
+        let id = (s.thread.last?.id ?? 0) + 1
+        s.thread.append(ThreadItem(id: id, kind: .prompt, text: nil, date: date, images: images))
+    }
+
     /// Adds what just happened to the session's conversation.
     private func record(_ event: AgentEvent, in s: inout AgentSession, changes: [StoreChange]) {
+        if !event.promptImages.isEmpty { Self.attachImages(event.promptImages, to: &s, at: event.date) }
         var item: (ThreadItem.Kind, String?)?
         switch event.kind {
         case .promptSubmitted:

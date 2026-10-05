@@ -59,6 +59,10 @@ private struct MainSidebar: View {
                 SearchField(text: $query)
                 NewSessionMenu()
             }
+            .contextMenu {
+                Button("Clear Finished") { model.clearFinished() }
+                Button("Clear All") { model.clearAll() }
+            }
             .padding(.horizontal, 12)
             .padding(.bottom, 10)
 
@@ -84,6 +88,22 @@ private struct MainSidebar: View {
             }
 
             Spacer(minLength: 0)
+
+            let finished = model.sessions.filter { !$0.phase.isActive }.count
+            if finished > 0 {
+                Button { withAnimation(DS.Motion.base) { model.clearFinished() } } label: {
+                    Label("Clear \(finished) Finished", systemImage: "checkmark.circle")
+                        .font(DSFont.sans(12, .semibold))
+                        .foregroundStyle(DS.Palette.textSecondary)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 30)
+                        .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(Color.white.opacity(0.06)))
+                }
+                .buttonStyle(PressableStyle())
+                .padding(.horizontal, 12)
+                .padding(.bottom, 10)
+                .help("Removes finished sessions from the list. Right-click a session for Clear All.")
+            }
 
             Rectangle().fill(Color.white.opacity(0.06)).frame(height: 1).padding(.horizontal, 12)
 
@@ -181,10 +201,30 @@ private struct SidebarRow: View {
                 model.popupPage = .home
                 model.markSeen(session)
             }
+            .overlay(alignment: .trailing) {
+                // Clear it from the list right where you're looking.
+                if hovering {
+                    Button { withAnimation(DS.Motion.base) { model.dismiss(session) } } label: {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 9, weight: .bold))
+                            .foregroundStyle(DS.Palette.textSecondary)
+                            .frame(width: 22, height: 22)
+                            .background(Circle().fill(DS.Palette.overlay))
+                    }
+                    .buttonStyle(PressableStyle())
+                    .hoverTip(session.phase.isActive ? "Remove (returns on new activity)" : "Remove")
+                    .padding(.trailing, 10)
+                    .transition(.opacity)
+                }
+            }
             .contextMenu {
                 if model.canOpen(session) { Button("Open") { model.open(session) } }
                 if model.stopMethod(for: session) != nil { Button("Stop") { model.stop(session) } }
-                if !session.phase.isActive { Button("Dismiss") { model.dismiss(session) } }
+                Divider()
+                Button("Remove from Turbo") { model.dismiss(session) }
+                Button("Clear Finished") { model.clearFinished() }
+                    .disabled(!model.sessions.contains { !$0.phase.isActive })
+                Button("Clear All") { model.clearAll() }
             }
             .animation(DS.Motion.fast, value: hovering)
     }
@@ -474,7 +514,7 @@ private struct SessionPane: View {
         // Re-read when anything changes, including a final reply that lands after the turn ends.
         .task(id: "\(session.lastActivityAt.timeIntervalSince1970)|\(session.summary ?? "")|\(session.thread.count)") {
             guard let path = session.transcriptPath else { return }
-            let thread = await Task.detached(priority: .utility) { ClaudeTranscript.thread(atPath: path) }.value
+            let thread = await Task.detached(priority: .utility) { ClaudeTranscript.thread(atPath: path, imageDirectory: AppModel.transcriptImageDirectory) }.value
             guard !Task.isCancelled else { return }
             transcriptThread = thread
         }
@@ -557,6 +597,7 @@ private struct ConversationHeader: View {
 }
 
 private struct ThreadRow: View {
+    @EnvironmentObject private var model: AppModel
     let item: ThreadItem
     let session: AgentSession
     let lastInRun: Bool
@@ -566,7 +607,12 @@ private struct ThreadRow: View {
         case .prompt:
             HStack {
                 Spacer(minLength: 80)
-                Bubble(text: item.text ?? "", fill: DS.Palette.brand, foreground: .white, mine: true, tail: lastInRun)
+                VStack(alignment: .trailing, spacing: 4) {
+                    if !item.images.isEmpty { PromptImages(urls: item.images) }
+                    if let text = item.text, !text.isEmpty {
+                        Bubble(text: text, fill: DS.Palette.brand, foreground: .white, mine: true, tail: lastInRun)
+                    }
+                }
             }
         case .reply:
             HStack(alignment: .bottom, spacing: 8) {
@@ -589,15 +635,29 @@ private struct ThreadRow: View {
             .frame(maxWidth: .infinity)
             .padding(.vertical, 1)
         case .needs:
-            Label(item.text.map { "Needs your OK: " + $0 } ?? "Needs your OK", systemImage: "hand.raised.fill")
-                .font(DSFont.sans(12, .semibold))
-                .foregroundStyle(DS.Palette.gold)
-                .lineLimit(2)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 6)
-                .background(Capsule().fill(DS.Palette.gold.opacity(0.12)))
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 4)
+            VStack(spacing: 8) {
+                Label(item.text.map { "Needs your OK: " + $0 } ?? "Needs your OK", systemImage: "hand.raised.fill")
+                    .font(DSFont.sans(12, .semibold))
+                    .foregroundStyle(DS.Palette.gold)
+                    .lineLimit(2)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                    .background(Capsule().fill(DS.Palette.gold.opacity(0.12)))
+                // Turbo can't answer this one itself (no Allow bar below), so say where to go.
+                if lastInRun, case .needsInput = session.phase, model.pendingApproval(for: session) == nil {
+                    HStack(spacing: 8) {
+                        Text("Answer it in \(session.agent.displayName).")
+                            .font(DSFont.sans(11.5, .medium))
+                            .foregroundStyle(DS.Palette.textSecondary)
+                        Button("Open Session") { model.open(session) }
+                            .buttonStyle(SecondaryButtonStyle())
+                        Button("Dismiss") { model.dismiss(session) }
+                            .buttonStyle(GhostButtonStyle())
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 4)
         case let .finished(failed):
             VStack(spacing: 6) {
                 Label(failed ? "Failed" : "Done", systemImage: failed ? "xmark.circle.fill" : "checkmark.circle.fill")
@@ -645,17 +705,114 @@ private struct Bubble: View {
     let tail: Bool
 
     var body: some View {
-        Text(text)
-            .font(DSFont.sans(13.5, .medium))
-            .foregroundStyle(foreground)
-            .textSelection(.enabled)
-            .fixedSize(horizontal: false, vertical: true)
+        MarkdownText(markdown: text, foreground: foreground)
             .padding(.horizontal, 13)
             .padding(.vertical, 8)
             .background(
                 BubbleShape(bottomLeading: !mine && tail ? 5 : 18, bottomTrailing: mine && tail ? 5 : 18)
                     .fill(fill)
             )
+    }
+}
+
+/// Images you sent with a prompt, like photos in a message thread. Click one to open it.
+private struct PromptImages: View {
+    let urls: [URL]
+
+    var body: some View {
+        HStack(spacing: 4) {
+            ForEach(urls, id: \.self) { url in
+                Button { NSWorkspace.shared.open(url) } label: { thumbnail(url) }
+                    .buttonStyle(PressableStyle())
+                    .help(url.lastPathComponent)
+            }
+        }
+    }
+
+    private var side: CGFloat { urls.count == 1 ? 200 : 110 }
+
+    @ViewBuilder private func thumbnail(_ url: URL) -> some View {
+        Group {
+            if url.isFileURL {
+                if let image = NSImage(contentsOf: url) {
+                    Image(nsImage: image).resizable().scaledToFill()
+                } else {
+                    placeholder
+                }
+            } else {
+                AsyncImage(url: url) { phase in
+                    if let image = phase.image { image.resizable().scaledToFill() } else { placeholder }
+                }
+            }
+        }
+        .frame(width: side, height: side)
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(Color.white.opacity(0.08), lineWidth: 1))
+    }
+
+    private var placeholder: some View {
+        ZStack {
+            DS.Palette.card
+            Image(systemName: "photo").foregroundStyle(DS.Palette.textTertiary)
+        }
+    }
+}
+
+/// An agent reply laid out like chat: real lists, bold, code and headings instead of raw markdown.
+private struct MarkdownText: View {
+    let markdown: String
+    let foreground: Color
+
+    var body: some View {
+        let blocks = MarkdownBlock.parse(markdown)
+        VStack(alignment: .leading, spacing: 6) {
+            ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
+                view(for: block)
+            }
+        }
+        .foregroundStyle(foreground)
+        .tint(foreground)
+        .textSelection(.enabled)
+        .fixedSize(horizontal: false, vertical: true)
+    }
+
+    @ViewBuilder private func view(for block: MarkdownBlock) -> some View {
+        switch block {
+        case .heading(let level, let text):
+            inline(text).font(DSFont.sans(level <= 2 ? 15 : 14, .bold))
+        case .paragraph(let text):
+            inline(text).font(DSFont.sans(13.5, .medium))
+        case .listItem(let marker, let text, let depth):
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Text(marker)
+                    .font(DSFont.sans(13.5, .semibold))
+                    .opacity(0.7)
+                    .frame(minWidth: 14, alignment: .trailing)
+                inline(text).font(DSFont.sans(13.5, .medium))
+            }
+            .padding(.leading, CGFloat(depth) * 14)
+        case .quote(let text):
+            HStack(spacing: 8) {
+                RoundedRectangle(cornerRadius: 1).fill(foreground.opacity(0.4)).frame(width: 2)
+                inline(text).font(DSFont.sans(13.5, .medium)).opacity(0.8)
+            }
+        case .code(let text):
+            ScrollView(.horizontal, showsIndicators: false) {
+                Text(text).font(DSFont.mono(12))
+            }
+            .padding(.horizontal, 9)
+            .padding(.vertical, 7)
+            .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Color.black.opacity(0.25)))
+        case .rule:
+            Rectangle().fill(foreground.opacity(0.2)).frame(height: 1)
+        }
+    }
+
+    /// Bold, italic, `code` and links, keeping the text if the markdown doesn't parse.
+    private func inline(_ text: String) -> Text {
+        let options = AttributedString.MarkdownParsingOptions(interpretedSyntax: .inlineOnlyPreservingWhitespace)
+        if let styled = try? AttributedString(markdown: text, options: options) { return Text(styled) }
+        return Text(text)
     }
 }
 

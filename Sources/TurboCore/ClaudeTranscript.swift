@@ -33,26 +33,42 @@ public enum ClaudeTranscript {
 
     /// The conversation in a Claude Code transcript: what you asked, each step, and each reply,
     /// oldest first. Reads only the tail of the file; subagent chatter is left out.
-    public static func thread(atPath path: String, tailBytes: Int = 512 * 1024, limit: Int = 80) -> [ThreadItem] {
+    /// `imageDirectory` is where pasted images get saved so the chat can show them (nil skips them).
+    public static func thread(atPath path: String, tailBytes: Int = 2 * 1024 * 1024, limit: Int = 80, imageDirectory: URL? = nil) -> [ThreadItem] {
         guard let handle = FileHandle(forReadingAtPath: path) else { return [] }
         defer { try? handle.close() }
         let size = handle.seekToEndOfFile()
-        let start = size > UInt64(tailBytes) ? size - UInt64(tailBytes) : 0
+        var start = size > UInt64(tailBytes) ? size - UInt64(tailBytes) : 0
+        // Back up to a record boundary so a prompt carrying a big pasted image is read whole
+        // (up to 16 MB extra, the most an image record can be).
+        let chunk: UInt64 = 256 * 1024
+        var searched: UInt64 = 0
+        boundary: while start > 0 && searched < 16 * 1024 * 1024 {
+            let from = start > chunk ? start - chunk : 0
+            handle.seek(toFileOffset: from)
+            let bytes = handle.readData(ofLength: Int(start - from))
+            if let newline = bytes.lastIndex(of: 0x0A) {
+                start = from + UInt64(newline - bytes.startIndex) + 1
+                break boundary
+            }
+            searched += start - from
+            start = from
+        }
         handle.seek(toFileOffset: start)
-        return thread(inJSONL: handle.readDataToEndOfFile(), limit: limit)
+        return thread(inJSONL: handle.readDataToEndOfFile(), limit: limit, imageDirectory: imageDirectory)
     }
 
-    public static func thread(inJSONL data: Data, limit: Int = 80) -> [ThreadItem] {
+    public static func thread(inJSONL data: Data, limit: Int = 80, imageDirectory: URL? = nil) -> [ThreadItem] {
         let iso = ISO8601DateFormatter()
         iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         var items: [ThreadItem] = []
-        func add(_ kind: ThreadItem.Kind, _ text: String?, _ date: Date) {
+        func add(_ kind: ThreadItem.Kind, _ text: String?, _ date: Date, images: [URL] = []) {
             // Consecutive text from one reply arrives as several lines: keep it as one bubble.
             if kind == .reply, let last = items.last, last.kind == .reply, let text {
                 items[items.count - 1].text = (last.text.map { $0 + "\n\n" } ?? "") + text
                 return
             }
-            items.append(ThreadItem(id: items.count + 1, kind: kind, text: text, date: date))
+            items.append(ThreadItem(id: items.count + 1, kind: kind, text: text, date: date, images: images))
         }
         // Transcripts can repeat a record (snapshots, resumes); count each one once.
         var seenRecords = Set<String>()
@@ -70,8 +86,10 @@ public enum ClaudeTranscript {
                 let text = (message["content"] as? String)
                     ?? blocks.filter { $0["type"] as? String == "text" }.compactMap { $0["text"] as? String }.joined(separator: "\n")
                 let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard !trimmed.isEmpty, !trimmed.hasPrefix("<command"), !trimmed.hasPrefix("<local-command") else { continue }
-                add(.prompt, trimmed, date)
+                guard !trimmed.hasPrefix("<command"), !trimmed.hasPrefix("<local-command") else { continue }
+                let images = imageDirectory.map { promptImages(blocks, into: $0) } ?? []
+                guard !trimmed.isEmpty || !images.isEmpty else { continue }
+                add(.prompt, trimmed.isEmpty ? nil : trimmed, date, images: images)
             case "assistant":
                 if let text = (message["content"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty {
                     add(.reply, text, date)
@@ -104,6 +122,34 @@ public enum ClaudeTranscript {
             }
         }
         return Array(items.suffix(limit))
+    }
+
+    /// Pasted images in a prompt, saved once each (named by content) so the chat can show them.
+    static func promptImages(_ blocks: [[String: Any]], into directory: URL) -> [URL] {
+        var urls: [URL] = []
+        for block in blocks where block["type"] as? String == "image" {
+            guard urls.count < 4, let source = block["source"] as? [String: Any],
+                  source["type"] as? String == "base64", let base64 = source["data"] as? String,
+                  base64.count < 14_000_000 else { continue }
+            let ext: String
+            switch source["media_type"] as? String {
+            case "image/jpeg": ext = "jpg"
+            case "image/gif": ext = "gif"
+            case "image/webp": ext = "webp"
+            default: ext = "png"
+            }
+            // FNV-1a over the encoded bytes: the same image always lands on the same file.
+            var hash: UInt64 = 0xcbf29ce484222325
+            for byte in base64.utf8 { hash = (hash ^ UInt64(byte)) &* 0x100000001b3 }
+            let url = directory.appendingPathComponent(String(hash, radix: 16) + "." + ext)
+            if !FileManager.default.fileExists(atPath: url.path) {
+                guard let data = Data(base64Encoded: base64) else { continue }
+                try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+                guard (try? data.write(to: url)) != nil else { continue }
+            }
+            urls.append(url)
+        }
+        return urls
     }
 
     /// A user line that's something you typed, not a tool result Claude Code logs as "user".

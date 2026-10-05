@@ -49,11 +49,13 @@ public enum CloudRelay {
         let titleLines = shareTitles ? #"""
         if d.get("hook_event_name") == "UserPromptSubmit":
             out["prompt"] = str(d.get("prompt", "")).strip()[:500]
+        pending_imgs = []
         if d.get("hook_event_name") == "Stop":
             try:
                 with open(str(d.get("transcript_path") or ""), "rb") as fh:
                     fh.seek(0, 2)
-                    fh.seek(max(0, fh.tell() - 200000))
+                    # Big enough for a prompt record carrying a few full-size screenshots.
+                    fh.seek(max(0, fh.tell() - 24000000))
                     lines = fh.read().decode("utf-8", "ignore").splitlines()
                 for raw in reversed(lines):
                     try:
@@ -64,14 +66,19 @@ public enum CloudRelay {
                         continue
                     c0 = (o.get("message") or {}).get("content")
                     if o.get("type") == "user" and not (isinstance(c0, list) and any(isinstance(b, dict) and b.get("type") == "tool_result" for b in c0)):
+                        # The prompt that started this turn: its pasted images go up after the Stop check.
+                        for b in (c0 if isinstance(c0, list) else []):
+                            src = b.get("source") if isinstance(b, dict) and b.get("type") == "image" else None
+                            if isinstance(src, dict) and src.get("type") == "base64" and len(pending_imgs) < 3:
+                                ext = {"image/jpeg": "jpg", "image/gif": "gif", "image/webp": "webp"}.get(src.get("media_type"), "png")
+                                pending_imgs.append((str(src.get("data") or ""), ext))
                         break
-                    if o.get("type") != "assistant":
+                    if o.get("type") != "assistant" or "reply" in out:
                         continue
                     c = (o.get("message") or {}).get("content")
                     t = c if isinstance(c, str) else chr(10).join(b.get("text", "") for b in (c or []) if isinstance(b, dict) and b.get("type") == "text")
                     if t.strip():
                         out["reply"] = t.strip()[:1500]
-                        break
             except Exception:
                 pass
 
@@ -80,7 +87,31 @@ public enum CloudRelay {
         let publish = publishURL(channel: channel, server: server).absoluteString
         let sourceLine = source.map { "out[\"source\"] = \"\($0)\"\n" } ?? ""
         let sharePaths = shareTitles ? "            out[\"changes\"][\"paths\"] = paths[:8]\n" : ""
-        let note = shareTitles ? " Also your prompts and the final replies from Claude (you turned that on)." : ""
+        // Uploads run in parallel with a 4 second budget, after the Stop and reply check, so a slow
+        // file server never holds up the session for long.
+        let imageLines = shareTitles ? #"""
+        if pending_imgs:
+            import base64, threading, urllib.request
+            links = [None] * len(pending_imgs)
+            def upload(i, data, ext):
+                try:
+                    img = base64.b64decode(data)
+                    if len(img) <= 5000000:
+                        req = urllib.request.Request("TURBO_FILES_URL", data=img, method="PUT", headers={"Filename": "image-" + str(i + 1) + "." + ext})
+                        links[i] = (json.loads(urllib.request.urlopen(req, timeout=4).read().decode()).get("attachment") or {}).get("url")
+                except Exception:
+                    pass
+            workers = [threading.Thread(target=upload, args=(i, data, ext), daemon=True) for i, (data, ext) in enumerate(pending_imgs)]
+            for w in workers:
+                w.start()
+            deadline = time.time() + 4
+            for w in workers:
+                w.join(max(0, deadline - time.time()))
+            if any(links):
+                out["prompt_images"] = [x for x in links if x]
+
+        """#.replacingOccurrences(of: "TURBO_FILES_URL", with: filesURL(channel: channel, server: server).absoluteString) : ""
+        let note = shareTitles ? " Also your prompts, images you paste in them and the final replies from Claude (you turned that on)." : ""
         return #"""
         #!/bin/bash
         # \#(marker): tells the Turbo app on your Mac what this cloud session is doing.
@@ -222,7 +253,7 @@ public enum CloudRelay {
                     open(state, "w").write(" ".join([str(time.time())] + ids[-50:]))
             except Exception:
                 pass
-        print(json.dumps(out))
+        \#(imageLines)print(json.dumps(out))
         if ctl:
             print(ctl)
         ' 2>/dev/null) || exit 0
@@ -311,7 +342,7 @@ public enum CloudRelay {
     /// What a saved plugin was built with. When this changes (new channel, sharing turned on or
     /// off), the installed plugin is out of date and needs uploading again.
     public static func coworkPluginSignature(channel: String, shareTitles: Bool) -> String {
-        "\(channel)|\(shareTitles ? "share" : "private")|v1"
+        "\(channel)|\(shareTitles ? "share" : "private")|v2"
     }
 
     public static func coworkPlugin(channel: String, server: URL = defaultServer, shareTitles: Bool = false) -> [String: String] {
@@ -341,7 +372,7 @@ public enum CloudRelay {
             # Turbo for Cowork
 
             Reports what your Cowork tasks are doing to the Turbo app on your Mac, through your private
-            channel. It sends the event, the folder name and Claude's one-line description of each step\(shareTitles ? ", plus your prompts and Claude's final replies" : ""). Never files.
+            channel. It sends the event, the folder name and Claude's one-line description of each step\(shareTitles ? ", plus your prompts, images you paste in them and Claude's final replies" : ""). Never code files.
             """,
         ]
     }
