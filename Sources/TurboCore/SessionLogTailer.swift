@@ -12,6 +12,13 @@ public struct SessionLogContext: Equatable {
     public var logPath: String?
     /// A sidecar file worth re-reading later (Cowork writes the session title after the fact).
     public var sidecar: URL?
+    /// A Claude Code transcript Turbo can read the latest reply from.
+    public var transcriptPath: String?
+    /// The agent ended a message without asking for a tool: the turn is probably over. If the
+    /// log stays quiet for a few seconds, the tailer reports it finished with this summary.
+    /// (Claude Code transcripts have no explicit "turn done" line.)
+    public var finishPending = false
+    public var finishSummary: String?
 
     public init(sessionID: String, cwd: String? = nil, title: String? = nil, hostAppBundleID: String? = nil, sidecar: URL? = nil) {
         self.sessionID = sessionID
@@ -44,7 +51,12 @@ public final class SessionLogTailer {
         var offset: UInt64
         var context: SessionLogContext
         var partial = Data()
+        var lastLineAt: Date?
     }
+
+    /// How long a log must stay quiet after a final-looking message before the turn counts as done.
+    /// Long enough to cover Claude writing out a big tool call after a "Let me look" line.
+    public var finishDelay: TimeInterval = 30
 
     private var files: [String: FileState] = [:]
     private var watched: [URL] = []
@@ -76,6 +88,7 @@ public final class SessionLogTailer {
                     state.partial = Data()
                 }
                 guard size > state.offset else {
+                    finishIfQuiet(&state, now: now)
                     files[path] = state
                     continue
                 }
@@ -89,9 +102,21 @@ public final class SessionLogTailer {
                 let created = attributes[.creationDate] as? Date
                 let isNew = created.map { $0 >= startedAt.addingTimeInterval(-1) } ?? false
                 read(path: path, state: &state, upTo: size, emit: isNew && now > startedAt, now: now)
+                // History never finishes a turn on its own.
+                if !(isNew && now > startedAt) { state.context.finishPending = false }
                 files[path] = state
             }
         }
+    }
+
+    private func finishIfQuiet(_ state: inout FileState, now: Date) {
+        guard state.context.finishPending, let last = state.lastLineAt, now.timeIntervalSince(last) >= finishDelay else { return }
+        state.context.finishPending = false
+        let c = state.context
+        onEvent(AgentEvent(
+            agent: source.agent, sessionID: c.sessionID, cwd: c.cwd, kind: .turnComplete(summary: c.finishSummary),
+            transcriptPath: c.transcriptPath, hostAppBundleID: c.hostAppBundleID, title: c.title, date: now
+        ).with(logPath: c.logPath))
     }
 
     private func read(path: String, state: inout FileState, upTo size: UInt64, emit: Bool, now: Date) {
@@ -110,10 +135,11 @@ public final class SessionLogTailer {
             buffer = Data(buffer[buffer.index(after: newline)...])
             state.context.prompt = nil
             guard let kind = source.parse(line: line, context: &state.context), emit else { continue }
+            state.lastLineAt = now
             let c = state.context
             onEvent(AgentEvent(
                 agent: source.agent, sessionID: c.sessionID, cwd: c.cwd, kind: kind,
-                hostAppBundleID: c.hostAppBundleID, title: c.title, prompt: c.prompt, date: now
+                transcriptPath: c.transcriptPath, hostAppBundleID: c.hostAppBundleID, title: c.title, prompt: c.prompt, date: now
             ).with(logPath: c.logPath))
         }
         state.partial = emit ? buffer : Data()
@@ -214,45 +240,78 @@ public struct CoworkSessionSource: SessionLogSource {
         let fm = FileManager.default
         func subdirectories(_ url: URL) -> [URL] {
             let names = (try? fm.contentsOfDirectory(atPath: url.path)) ?? []
-            return names.filter { !$0.hasPrefix(".") }.map { url.appendingPathComponent($0, isDirectory: true) }.filter {
+            return names.filter { !$0.hasPrefix(".") || $0 == ".claude" }.map { url.appendingPathComponent($0, isDirectory: true) }.filter {
                 var isDir: ObjCBool = false
                 return fm.fileExists(atPath: $0.path, isDirectory: &isDir) && isDir.boolValue
             }
+        }
+        func isRecent(_ file: URL) -> Bool {
+            guard let modified = (try? fm.attributesOfItem(atPath: file.path))?[.modificationDate] as? Date else { return false }
+            return now.timeIntervalSince(modified) < recentWindow
         }
         var result: [URL] = []
         for account in subdirectories(root) {
             for space in subdirectories(account) {
                 for session in subdirectories(space) where session.lastPathComponent.hasPrefix("local_") {
+                    // Older Claude apps kept an audit log per task.
                     let audit = session.appendingPathComponent("audit.jsonl")
-                    guard let modified = (try? fm.attributesOfItem(atPath: audit.path))?[.modificationDate] as? Date,
-                          now.timeIntervalSince(modified) < recentWindow else { continue }
-                    result.append(audit)
+                    if isRecent(audit) { result.append(audit) }
+                    // Newer ones run Claude Code inside the task and keep its transcript there.
+                    let projects = session.appendingPathComponent(".claude/projects", isDirectory: true)
+                    for project in subdirectories(projects) {
+                        let names = (try? fm.contentsOfDirectory(atPath: project.path)) ?? []
+                        for name in names where name.hasSuffix(".jsonl") {
+                            let file = project.appendingPathComponent(name)
+                            if isRecent(file) { result.append(file) }
+                        }
+                    }
                 }
             }
         }
         return result
     }
 
+    /// The task folder (`local_<id>`) a log belongs to, whichever layout wrote it.
+    static func sessionDirectory(for file: URL) -> URL {
+        var dir = file.deletingLastPathComponent()
+        while dir.pathComponents.count > 1 && !dir.lastPathComponent.hasPrefix("local_") {
+            dir = dir.deletingLastPathComponent()
+        }
+        return dir.lastPathComponent.hasPrefix("local_") ? dir : file.deletingLastPathComponent()
+    }
+
+    static func isTranscript(_ path: String?) -> Bool {
+        path?.contains("/.claude/projects/") == true
+    }
+
     public func context(for file: URL) -> SessionLogContext {
-        let sessionDir = file.deletingLastPathComponent()
+        let sessionDir = Self.sessionDirectory(for: file)
         let manifest = sessionDir.deletingLastPathComponent().appendingPathComponent(sessionDir.lastPathComponent + ".json")
         var context = SessionLogContext(sessionID: sessionDir.lastPathComponent, hostAppBundleID: Self.desktopBundleID, sidecar: manifest)
+        context.logPath = file.path
+        if Self.isTranscript(file.path) { context.transcriptPath = file.path }
         Self.applyManifest(at: manifest, to: &context)
         return context
     }
 
     public func parse(line: Data, context: inout SessionLogContext) -> AgentEventKind? {
-        switch EventParser.parseCoworkAuditLine(line) {
-        case .meta:
-            // The init line's cwd is the VM's sandbox path; the manifest's folders are what people recognize.
-            return nil
-        case let .event(kind):
-            if context.title == nil, let manifest = context.sidecar { Self.applyManifest(at: manifest, to: &context) }
-            return kind
+        let parsed = Self.isTranscript(context.logPath)
+            ? EventParser.parseClaudeTranscriptLine(line)
+            : EventParser.parseCoworkAuditLine(line).map { EventParser.TranscriptLine(rollout: $0) }
+        guard let parsed else { return nil }
+        if context.title == nil, let manifest = context.sidecar { Self.applyManifest(at: manifest, to: &context) }
+        // Any real activity means the turn is still going; a final-looking message arms the finish.
+        context.finishPending = parsed.mayFinish
+        if parsed.mayFinish { context.finishSummary = parsed.summary }
+        switch parsed.kind {
         case let .prompt(text):
             context.prompt = text
             return .promptSubmitted
-        case nil:
+        case let .event(kind):
+            if case .turnComplete = kind { context.finishPending = false }
+            return kind
+        case .meta:
+            // The init line's cwd is the sandbox path; the manifest's folders are what people recognize.
             return nil
         }
     }
