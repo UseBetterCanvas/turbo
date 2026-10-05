@@ -1071,3 +1071,22 @@ final class WorktreeSnapshotTests: XCTestCase {
         XCTAssertEqual(Set(delta.paths), ["a.swift", "b.swift", "New.swift"])
     }
 }
+
+final class PlanUsageResetTests: XCTestCase {
+    func testResetTimesFromHistory() throws {
+        let base = 1_791_000_000_000
+        func sample(_ minutes: Int, _ fh: Int, _ sd: Int) -> String {
+            #"{"t":"# + "\(base + minutes * 60_000)" + #","u":{"fh":"# + "\(fh)" + #","sd":"# + "\(sd)" + "}}"
+        }
+        // An old window ends (40 → 0), then new use starts at minute 300.
+        let samples = [sample(0, 30, 5), sample(60, 40, 6), sample(290, 0, 6), sample(300, 2, 7), sample(360, 10, 8)]
+        let json = #"{"version":2,"samples":["# + samples.joined(separator: ",") + "]}"
+        let usage = try XCTUnwrap(PlanUsage.latest(in: Data(json.utf8)))
+        let start = Date(timeIntervalSince1970: Double(base) / 1000 + 300 * 60)
+        XCTAssertEqual(usage.fiveHour, 10)
+        XCTAssertEqual(usage.sessionResetsAt, start.addingTimeInterval(5 * 3600))
+        XCTAssertEqual(usage.sessionTrend, [2, 10])
+        // The week never fell in this history, so there's no honest estimate for it.
+        XCTAssertNil(usage.weekResetsAt)
+    }
+}

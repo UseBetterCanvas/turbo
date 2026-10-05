@@ -157,6 +157,19 @@ final class AppModel: ObservableObject {
     @Published private(set) var composerNotes: [String: String] = [:]
     /// Your Claude plan usage, as the Claude app last recorded it.
     @Published private(set) var usage: PlanUsage?
+    /// The usage panel is open; the island stays expanded under it.
+    @Published private(set) var usageDetailsOpen = false
+    /// The pointer is on the usage panel.
+    var usagePanelHovered = false
+
+    func setUsageDetailsOpen(_ open: Bool) {
+        usageDetailsOpen = open
+        // Closing it with the pointer already gone: let the island fold back up now.
+        if !open && !pointerInside && isHoveringIsland {
+            isHoveringIsland = false
+            detailSessionID = nil
+        }
+    }
     private var usageAlertLevel = 0
     /// Where each session's repo stood when its turn started, to diff against when it ends.
     private struct Baseline {
@@ -354,6 +367,8 @@ final class AppModel: ObservableObject {
         hoverTask = Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: wantsExpand ? 140_000_000 : 260_000_000)
             guard let self, !Task.isCancelled, self.expandRequested == wantsExpand else { return }
+            // The usage panel hangs off the island: don't fold it away from under the pointer.
+            if !wantsExpand && self.usageDetailsOpen { return }
             if wantsExpand && !self.isHoveringIsland {
                 // A soft tick as it opens, felt on a Force Touch trackpad.
                 NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now)
