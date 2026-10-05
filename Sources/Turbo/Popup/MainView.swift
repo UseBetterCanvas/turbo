@@ -904,7 +904,14 @@ struct UsageMeter: View {
             }
         }
         .font(DSFont.sans(11.5, .semibold).monospacedDigit())
-        .help("Claude plan usage: \(usage.fiveHour)% of the 5-hour session limit" + (usage.week.map { ", \($0)% of the weekly limit" } ?? "") + ". As of \(usage.recordedAt.formatted(date: .omitted, time: .shortened)).")
+        .help(tooltip)
+    }
+
+    private var tooltip: String {
+        var text = "Claude plan usage: \(usage.fiveHour)% of the 5-hour session limit"
+        if let week = usage.week { text += ", \(week)% of the weekly limit" }
+        let time = usage.recordedAt.formatted(date: .omitted, time: .shortened)
+        return text + ". As of \(time)."
     }
 
     private func ring(_ percent: Int) -> some View {

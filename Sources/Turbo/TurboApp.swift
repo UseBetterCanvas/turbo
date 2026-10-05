@@ -57,9 +57,15 @@ final class StatusItemController: NSObject {
         button.image = image
         let count = waiting > 0 ? waiting : cooking
         button.title = count > 0 ? " \(count)" : ""
-        button.toolTip = (waiting > 0 ? "\(waiting) need you" : cooking > 0 ? "\(cooking) cooking" : "Turbo")
-            + (model.usage.map { " · Session \($0.fiveHour)%" + ($0.week.map { ", week \($0)%" } ?? "") } ?? "")
-            + (model.isQuiet ? " · Quiet" : "") + (model.hotKeyAvailable ? " · ⌃⌥Space" : "")
+        var tip: [String] = [waiting > 0 ? "\(waiting) need you" : cooking > 0 ? "\(cooking) cooking" : "Turbo"]
+        if let usage = model.usage {
+            var line = "Session \(usage.fiveHour)%"
+            if let week = usage.week { line += ", week \(week)%" }
+            tip.append(line)
+        }
+        if model.isQuiet { tip.append("Quiet") }
+        if model.hotKeyAvailable { tip.append("⌃⌥Space") }
+        button.toolTip = tip.joined(separator: " · ")
     }
 
     @objc private func clicked() {
